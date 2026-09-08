@@ -57,6 +57,8 @@ import {
   key,
   parseWorld,
   liveScore,
+  HORIZONTAL_LIMIT,
+  expandGround,
   type World,
   type Point,
   type MaterialId,
@@ -114,8 +116,8 @@ export default function Game() {
   const [live, setLive] = useState(false),
     [seconds, setSeconds] = useState(0),
     [result, setResult] = useState(false);
-  const [modal, setModal] = useState<'help' | 'settings' | null>(null),
-    [expanded, setExpanded] = useState(false);
+  const [modal, setModal] = useState<'help' | 'settings' | null>(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [toast, setToast] = useState(''),
     [saved, setSaved] = useState('保存済み'),
     [showHint, setShowHint] = useState(true);
@@ -202,7 +204,8 @@ export default function Game() {
           ? `${BLUEPRINTS.find((b) => b.id === plan)!.name}ができました！`
           : `${pending.length}ブロック、いい感じ！`,
       );
-      setSelection((p) => ({ ...p, y: p.y + 1 }));
+      // Keep floor extensions at ground level so repeated placement grows sideways.
+      setSelection((p) => ({ ...p, y: p.y === 0 ? 0 : Math.min(15, p.y + 1) }));
     }
   }
   function undo() {
@@ -326,7 +329,7 @@ export default function Game() {
   function startLive() {
     setLive(true);
     setSeconds(0);
-    setExpanded(false);
+    setToolsOpen(false);
     notify('あなたの島で、ライブがはじまります！');
     chime();
   }
@@ -353,8 +356,8 @@ export default function Game() {
     const move = (p: Point) => ({
       ...p,
       [axis]: Math.max(
-        axis === 'y' ? 0 : -14,
-        Math.min(axis === 'y' ? 15 : 14, p[axis] + d),
+        axis === 'y' ? 0 : -HORIZONTAL_LIMIT,
+        Math.min(axis === 'y' ? 15 : HORIZONTAL_LIMIT, p[axis] + d),
       ),
     });
     setSelection(move);
@@ -381,7 +384,7 @@ export default function Game() {
       }
       if (e.key === 'Escape') {
         setErase(false);
-        setExpanded(false);
+        setToolsOpen(false);
       }
       if (e.target !== document.body) return;
       const moves: Record<string, ['x' | 'y' | 'z', number]> = {
@@ -474,7 +477,7 @@ export default function Game() {
             MY LITTLE UNIVERSE
           </div>
           <h1>
-            {world.name}
+            <span>{world.name}</span>
             <Sparkles size={19} />
           </h1>
           <p>つくろう。ここが、あなたの居場所。</p>
@@ -677,7 +680,7 @@ export default function Game() {
         </div>
       </section>
       <section
-        className={`build-dock ${expanded ? 'expanded' : ''} ${live ? 'dock-live' : ''}`}
+        className={`build-dock ${toolsOpen ? 'tools-open' : ''} ${live ? 'dock-live' : ''}`}
         aria-label="建築ツール"
       >
         <div className="dock-top">
@@ -699,7 +702,6 @@ export default function Game() {
               onClick={() => {
                 setTab('blueprints');
                 setErase(false);
-                setExpanded(true);
               }}
             >
               <Layers3 size={17} />
@@ -707,6 +709,11 @@ export default function Game() {
             </Button>
           </div>
           <div className="dock-top-right">
+            <Button variant="ghost" className="tools-toggle"
+              aria-expanded={toolsOpen} aria-controls="build-options build-position"
+              onClick={() => setToolsOpen((v) => !v)}>
+              <Settings2 size={16} />{toolsOpen ? '閉じる' : '調整'}
+            </Button>
             <span className="free-label">素材はぜんぶ、使い放題。</span>
             <Button
               variant="ghost"
@@ -732,7 +739,7 @@ export default function Game() {
           <div className="palette-wrap">
             {tab === 'blocks' ? (
               <div className="material-palette">
-                {MATERIALS.slice(0, expanded ? 11 : 7).map((m, i) => (
+                {MATERIALS.map((m, i) => (
                   <Button
                     variant="ghost"
                     key={m.id}
@@ -757,15 +764,6 @@ export default function Game() {
                     )}
                   </Button>
                 ))}
-                <Button
-                  variant="ghost"
-                  className="more-materials"
-                  onClick={() => setExpanded((v) => !v)}
-                  aria-label={expanded ? '素材を閉じる' : 'すべての素材'}
-                >
-                  {expanded ? <Minus /> : <Plus />}
-                  <span>{expanded ? '閉じる' : 'もっと'}</span>
-                </Button>
               </div>
             ) : (
               <div className="blueprint-palette">
@@ -790,7 +788,7 @@ export default function Game() {
             )}
           </div>
           <div className="build-controls">
-            <div className="brush-controls">
+            <div className="brush-controls" id="build-options">
               {tab === 'blocks' ? (
                 <div className="segmented" aria-label="配置する形">
                   {(['single', 'line', 'floor'] as Brush[]).map((b, i) => (
@@ -841,7 +839,7 @@ export default function Game() {
             </Button>
           </div>
         </div>
-        <div className="dock-bottom">
+        <div className="dock-bottom" id="build-position">
           <span>
             <span className="status-dot" />
             {erase
@@ -956,6 +954,16 @@ export default function Game() {
                   }}
                 />
               </label>
+              <Button variant="outline" className="setting-row" disabled={live}
+                onClick={() => {
+                  const next = expandGround(world);
+                  if (next.error) { notify(next.error); return; }
+                  commit(next.world);
+                  setModal(null);
+                  notify('床を広げました。「戻す」で元に戻せます');
+                }}>
+                <Grid2X2 />保存した島の床を広げる
+              </Button>
               <Button
                 variant="outline"
                 className="setting-row"
@@ -1041,3 +1049,4 @@ export default function Game() {
     </main>
   );
 }
+

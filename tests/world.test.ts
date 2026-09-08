@@ -10,7 +10,52 @@ import {
   blueprint,
   key,
   liveScore,
+  expandGround,
+  HORIZONTAL_LIMIT,
+  LIMIT,
 } from '../lib/world.ts';
+void test('starter ground is approximately 2.5 times the previous area', () => {
+  let oldArea = 0;
+  for (let x = -10; x <= 10; x++)
+    for (let z = -9; z <= 9; z++)
+      if (x * x / 110 + z * z / 85 < 1) oldArea++;
+  const area = initialWorld().blocks.filter((b) => b.y === 0).length;
+  assert.ok(area / oldArea > 2.45 && area / oldArea < 2.55);
+});
+void test('connected floors extend in all horizontal directions beyond the old boundary', () => {
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    let w = initialWorld();
+    for (let i = 17; i <= 150; i++) {
+      // Start at the existing edge, including any missing cells before 17.
+      if (i === 17) for (let n = 14; n < 17; n++) {
+        const b = { x: n * dx, y: 0, z: n * dz, material: 'grass' as const };
+        if (!w.blocks.some((p) => key(p) === key(b))) w = place(w, [b]).world;
+      }
+      const result = place(w, [{ x: i * dx, y: 0, z: i * dz, material: 'grass' }]);
+      assert.equal(result.error, undefined);
+      w = result.world;
+    }
+    assert.deepEqual(parseWorld(JSON.stringify(w)), w);
+  }
+});
+void test('expanding an old save preserves buildings, progress and original data', () => {
+  const starter = initialWorld();
+  const old = { ...starter, blocks: starter.blocks.filter((b) => b.y > 0 || b.x * b.x / 110 + b.z * b.z / 85 < 1), placed: 23 };
+  const expanded = expandGround(old);
+  assert.equal(expanded.error, undefined);
+  assert.equal(expanded.world.placed, 23);
+  for (const b of old.blocks) assert.ok(expanded.world.blocks.includes(b));
+  assert.ok(expanded.world.blocks.length > old.blocks.length);
+  assert.ok(expandGround(expanded.world).error);
+});
+void test('extension still enforces GPU-safe coordinates and total block budget', () => {
+  const starter = initialWorld();
+  assert.ok(place(starter, [{ x: HORIZONTAL_LIMIT + 1, y: 0, z: 0, material: 'grass' }]).error);
+  const full = { ...starter, blocks: Array.from({ length: LIMIT }, (_, x) => ({ x, y: 0, z: 0, material: 'grass' as const })) };
+  assert.ok(place(full, [{ x: LIMIT, y: 0, z: 0, material: 'grass' }]).error);
+  assert.equal(expandGround(full).world, full);
+  assert.ok(expandGround(full).error);
+});
 void test('starter island roundtrips without losing any blocks', () => {
   const w = initialWorld();
   assert.deepEqual(parseWorld(JSON.stringify(w)), w);

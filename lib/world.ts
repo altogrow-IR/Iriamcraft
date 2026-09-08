@@ -22,6 +22,14 @@ export type World = {
   name: string;
 };
 export const LIMIT = 6000;
+// Enough room for a continuous strip using the entire block budget, with
+// coordinates small enough to retain accurate GPU picking and rendering.
+export const HORIZONTAL_LIMIT = 8192;
+export const ISLAND_AREA_SCALE = 2.5;
+export const ISLAND_RADIUS_X = Math.ceil(Math.sqrt(110 * ISLAND_AREA_SCALE));
+export const ISLAND_RADIUS_Z = Math.ceil(Math.sqrt(85 * ISLAND_AREA_SCALE));
+export const islandDistance = (x: number, z: number) =>
+  (x * x) / (110 * ISLAND_AREA_SCALE) + (z * z) / (85 * ISLAND_AREA_SCALE);
 export const MATERIALS: {
   id: MaterialId;
   name: string;
@@ -45,12 +53,12 @@ export const inBounds = (p: Point) =>
   Number.isInteger(p.x) &&
   Number.isInteger(p.y) &&
   Number.isInteger(p.z) &&
-  Math.abs(p.x) <= 14 &&
-  Math.abs(p.z) <= 14 &&
+  Math.abs(p.x) <= HORIZONTAL_LIMIT &&
+  Math.abs(p.z) <= HORIZONTAL_LIMIT &&
   p.y >= 0 &&
   p.y <= 15;
 export const onIsland = (x: number, z: number) =>
-  (x * x) / 110 + (z * z) / 85 < 1;
+  islandDistance(x, z) < 1;
 export function blueprint(
   type: Blueprint,
   origin: Point,
@@ -139,7 +147,7 @@ export function place(
       (b) => !inBounds(b) || !MATERIALS.some((m) => m.id === b.material),
     )
   )
-    return { world, error: '島のまわり・高さ16段まで建てられます' };
+    return { world, error: `横方向は±${HORIZONTAL_LIMIT}マス・高さ16段まで建てられます` };
   if (new Set(additions.map(key)).size !== additions.length)
     return { world, error: '同じ場所に複数のブロックは置けません' };
   const occupied = new Set(world.blocks.map(key));
@@ -178,12 +186,25 @@ export function place(
 export function remove(world: World, p: Point): World {
   return { ...world, blocks: world.blocks.filter((b) => key(b) !== key(p)) };
 }
+export function expandGround(world: World): { world: World; error?: string } {
+  const occupied = new Set(world.blocks.map(key));
+  const additions: Block[] = [];
+  for (let x = -ISLAND_RADIUS_X; x <= ISLAND_RADIUS_X; x++)
+    for (let z = -ISLAND_RADIUS_Z; z <= ISLAND_RADIUS_Z; z++)
+      if (onIsland(x, z) && !occupied.has(key({ x, y: 0, z })))
+        additions.push({ x, y: 0, z, material: 'grass' });
+  if (!additions.length) return { world, error: '床はすでに広がっています' };
+  if (world.blocks.length + additions.length > LIMIT)
+    return { world, error: '床を広げる空きがありません。ブロックを整理してみよう' };
+  return { world: { ...world, blocks: [...world.blocks, ...additions] } };
+}
 export function initialWorld(): World {
   const map = new Map<string, Block>();
   const add = (x: number, y: number, z: number, material: MaterialId) =>
     map.set(key({ x, y, z }), { x, y, z, material });
-  for (let x = -10; x <= 10; x++)
-    for (let z = -9; z <= 9; z++) if (onIsland(x, z)) add(x, 0, z, 'grass');
+  for (let x = -ISLAND_RADIUS_X; x <= ISLAND_RADIUS_X; x++)
+    for (let z = -ISLAND_RADIUS_Z; z <= ISLAND_RADIUS_Z; z++)
+      if (onIsland(x, z)) add(x, 0, z, 'grass');
   for (let z = -7; z <= 7; z++)
     for (let x = -1; x <= 1; x++) add(x, 0, z, 'sand');
   for (let x = -8; x <= 8; x++)

@@ -2157,3 +2157,71 @@ button svg {
     height: 34px !important;
   }
 }
+
+/* Keep the world visible; advanced building controls open on demand. */
+.world-info {
+  top: 12px; left: 12px; width: auto; min-width: 0;
+  max-width: min(300px, calc(100% - 82px));
+  padding: 8px 12px; border-radius: 10px;
+}
+.world-info h1 { margin: 0; font-size: 14px; gap: 6px; line-height: 1.5; }
+.world-info h1 > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.world-info h1 svg { width: 14px; height: 14px; }
+.world-info .eyebrow, .world-info > p, .world-info .world-stats,
+.world-info .level-line, .world-info .level-track { display: none; }
+.quest-card { top: 66px; }
+.sky-tag { top: 54px; left: 15px; }
+.tools-toggle { min-height: 44px; gap: 5px; font-size: 12px; }
+.build-dock:not(.tools-open) .brush-controls,
+.build-dock:not(.tools-open) .dock-bottom { display: none; }
+.build-dock:not(.tools-open) .build-controls { min-width: 170px; }
+.build-dock:not(.tools-open) .place-button { width: 100%; }
+@media (max-width: 760px) {
+  .game { min-height: 0; }
+  .build-dock { padding: 0 10px env(safe-area-inset-bottom); max-height: 48dvh; overflow-y: auto; }
+  .dock-top { height: 44px; }
+  .dock-tabs { gap: 8px; }
+  .dock-tab { font-size: 12px !important; min-height: 44px; }
+  .new-badge { display: none; }
+  .dock-top-right { gap: 0; }
+  .dock-top-right .icon-button { width: 44px !important; height: 44px !important; }
+  .tools-toggle { padding: 0 8px !important; }
+  .dock-main { padding: 4px 0 7px; gap: 6px; min-height: 0; }
+  .material-palette, .expanded .material-palette { flex-wrap: nowrap; max-height: none; overflow-x: auto; }
+  .material, .expanded .material {
+    flex: 0 0 auto; min-width: 74px; width: auto; height: 44px !important;
+    flex-direction: row; gap: 4px !important; padding: 0 8px !important;
+    font-size: 12px !important;
+  }
+  .key-number, .more-materials { display: none; }
+  .voxel-icon { margin: 0; }
+  .voxel-icon svg { width: 21px !important; height: 21px !important; }
+  .material-check { display: none; }
+  .build-controls { flex-wrap: wrap; gap: 6px; }
+  .build-dock .place-button { width: 100%; min-width: 0; height: 44px !important; }
+  .brush-controls { width: 100%; flex: 1 0 100%; }
+  .segmented, .segmented button, .erase-button { height: 44px !important; }
+  .segmented button { min-width: 44px; }
+  .erase-button { width: 44px !important; }
+  .dock-bottom { height: auto; padding: 4px 0 6px; }
+  .position-controls { gap: 1px; flex-wrap: wrap; justify-content: flex-end; }
+  .position-controls > span:first-of-type { margin-right: auto; }
+  .position-controls button { width: 44px; height: 44px; }
+  .position-controls .height-label { font-size: 12px; }
+  .blueprint-palette { flex-wrap: nowrap; overflow-x: auto; }
+  .blueprint-card { flex: 0 0 auto; height: 44px !important; min-width: 130px; }
+  .blueprint-card strong { font-size: 12px; }
+  .blueprint-card small { display: none; }
+  .world-hint { bottom: 76px; }
+  .scene-caption { display: none; }
+  .toast { bottom: calc(158px + env(safe-area-inset-bottom)); }
+  .tools-open ~ .toast { bottom: calc(min(48dvh, 260px) + 12px); }
+}
+@media (max-width: 760px) {
+  .more-materials { display: none !important; }
+  .world-hint { bottom: 128px; }
+}
+.sky-tag { transform: none; }
+@media (min-width: 761px) {
+  .quest-card { top: 100px; }
+}

@@ -4,6 +4,11 @@ import {
   MATERIALS,
   LIMIT,
   onIsland,
+  inBounds,
+  ISLAND_RADIUS_X,
+  ISLAND_RADIUS_Z,
+  islandDistance,
+  HORIZONTAL_LIMIT,
   type Block,
   type Point,
 } from '@/lib/world';
@@ -65,7 +70,7 @@ export class IslandEngine {
     this.controls.maxPolarAngle = Math.PI / 2.15;
     this.controls.minZoom = 0.55;
     this.controls.maxZoom = 3;
-    this.controls.maxTargetRadius = 12;
+    this.controls.maxTargetRadius = HORIZONTAL_LIMIT * Math.SQRT2;
     this.controls.touches.ONE = THREE.TOUCH.ROTATE;
     this.controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
     this.ambient = new THREE.HemisphereLight(0xe8faff, 0x8e7cb1, 2.3);
@@ -188,7 +193,7 @@ export class IslandEngine {
           new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.5),
           new THREE.Vector3(),
         );
-        if (p && onIsland(Math.round(p.x), Math.round(p.z)))
+        if (p && inBounds({ x: Math.round(p.x), y: 0, z: Math.round(p.z) }))
           this.select(
             { x: Math.round(p.x), y: -1, z: Math.round(p.z) },
             { x: 0, y: 1, z: 0 },
@@ -232,12 +237,12 @@ export class IslandEngine {
   }
   private addFoundation() {
     const parts: { x: number; y: number; z: number; color: string }[] = [];
-    for (let x = -10; x <= 10; x++)
-      for (let z = -9; z <= 9; z++)
+    for (let x = -ISLAND_RADIUS_X; x <= ISLAND_RADIUS_X; x++)
+      for (let z = -ISLAND_RADIUS_Z; z <= ISLAND_RADIUS_Z; z++)
         if (onIsland(x, z)) {
           const depth =
             1 +
-            Math.floor((1 - ((x * x) / 110 + (z * z) / 85)) * 4) +
+            Math.floor((1 - islandDistance(x, z)) * 4) +
             (Math.abs(x * 7 + z * 11) % 3 === 0 ? 1 : 0);
           for (let y = -1; y >= -depth; y--)
             parts.push({
@@ -410,7 +415,7 @@ export class IslandEngine {
       h = this.host.clientHeight;
     if (!w || !h) return;
     const aspect = w / h,
-      view = Math.max(25, 28 / aspect);
+      view = Math.max(36, 43 / aspect);
     this.camera.left = (-view * aspect) / 2;
     this.camera.right = (view * aspect) / 2;
     this.camera.top = view / 2;
