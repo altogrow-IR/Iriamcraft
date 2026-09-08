@@ -355,8 +355,10 @@ export class IslandEngine {
     this.voxels.computeBoundingSphere();
   }
   setGhost(blocks: Point[], valid = true, erase = false) {
-    // Hide the decorative underside while building below the ground.
-    if (this.foundation) this.foundation.visible = !this.blocks.some((b) => b.y < 0) && !blocks.some((b) => b.y < 0);
+    // The original island underside is part of the scene, not a placement
+    // preview. Keep it visible while adding underground blocks so a new
+    // construction cannot make the island appear to lose its bottom layer.
+    if (this.foundation) this.foundation.visible = true;
     this.ghost.count = Math.min(blocks.length, 200);
     const matrix = new THREE.Matrix4();
     blocks.slice(0, 200).forEach((p, i) => {
