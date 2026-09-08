@@ -51,7 +51,7 @@ Sites公式テンプレートを利用し、端末内で完結するゲーム向
 
 `npm run build` の `dist` を静的ホスティングへ配置します。`base: './'` でリポジトリ名配下に対応。アプリは単一画面のためSPAリロード404対策は不要です。
 
-GitHub Pages向けの手動実行ワークフローを `.github/workflows/pages.yml` に同梱。GitHubリポジトリへpushし、Settings → Pages → SourceをGitHub Actionsにすると、Actionsの「Deploy Iriamcraft」から公開できます。ここでの公開先とは別の作業で、自動pushはしません。
+GitHub Pages向けのワークフローを `.github/workflows/pages.yml` に同梱。Settings → Pages → SourceをGitHub Actionsにすると、`main` ブランチへのpushで自動公開されます。Actionsの「Deploy Iriamcraft」から手動実行することもできます。
 
 対応ブラウザではWebMCPの `read_island` / `place_island_blocks` が利用できます。UIと同じ検証・履歴・保存処理を通ります。
 
