@@ -99,6 +99,21 @@ void test('placement, collision and removal preserve the original world', () => 
   assert.equal(remove(result.world, p).blocks.length, w.blocks.length);
   assert.equal(w.placed, 0);
 });
+
+void test('ground blocks can be removed and replaced at height zero', () => {
+  const world = initialWorld();
+  const point = { x: 0, y: 0, z: 0 };
+  const withoutFloor = remove(world, point);
+
+  assert.equal(withoutFloor.blocks.some((block) => key(block) === key(point)), false);
+
+  const replaced = place(withoutFloor, [{ ...point, material: 'pink' }]);
+  assert.equal(replaced.error, undefined);
+  assert.equal(
+    replaced.world.blocks.find((block) => key(block) === key(point))?.material,
+    'pink',
+  );
+});
 void test('3x3 brush is atomic when any block overlaps', () => {
   const w = initialWorld();
   const blocks = brushBlocks({ x: 0, y: 1, z: 4 }, 'wood', 'floor');

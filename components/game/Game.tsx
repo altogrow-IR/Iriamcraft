@@ -142,7 +142,7 @@ export default function Game() {
       : brushBlocks(selection, material, brush, rotation);
   const validation = place(world, pending),
     score = liveScore(world);
-  const canRemove = world.blocks.some((b) => key(b) === key(hit)) && hit.y !== 0;
+  const canRemove = world.blocks.some((b) => key(b) === key(hit));
   const level = 1 + Math.floor(world.placed / 50);
   function notify(message: string) {
     setToast(message);
@@ -192,7 +192,7 @@ export default function Game() {
     if (!ready || live) return;
     if (erase) {
       if (!canRemove) {
-        notify('高さ0の地面は残して、上下のブロックを選んでね');
+        notify('取り外すブロックを選んでね');
         return;
       }
       commit(remove(world, hit));
