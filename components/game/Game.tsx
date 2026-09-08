@@ -58,6 +58,7 @@ import {
   parseWorld,
   liveScore,
   HORIZONTAL_LIMIT,
+  VERTICAL_LIMIT,
   expandGround,
   type World,
   type Point,
@@ -65,6 +66,7 @@ import {
   type Brush,
   type Blueprint,
 } from '@/lib/world';
+import { pickLiveComment, type LiveComment } from '@/lib/live-comments';
 import { IslandEngine } from './engine';
 import { registerWorldTools } from '@/lib/webmcp';
 
@@ -117,6 +119,10 @@ export default function Game() {
     [seconds, setSeconds] = useState(0),
     [result, setResult] = useState(false);
   const [modal, setModal] = useState<'help' | 'settings' | null>(null);
+  const [comment, setComment] = useState<LiveComment>();
+  const [chatVisible, setChatVisible] = useState(true);
+  const nightRef = useRef(night);
+  nightRef.current = night;
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toast, setToast] = useState(''),
     [saved, setSaved] = useState('保存済み'),
@@ -136,7 +142,7 @@ export default function Game() {
       : brushBlocks(selection, material, brush, rotation);
   const validation = place(world, pending),
     score = liveScore(world);
-  const canRemove = world.blocks.some((b) => key(b) === key(hit)) && hit.y > 0;
+  const canRemove = world.blocks.some((b) => key(b) === key(hit)) && hit.y !== 0;
   const level = 1 + Math.floor(world.placed / 50);
   function notify(message: string) {
     setToast(message);
@@ -186,7 +192,7 @@ export default function Game() {
     if (!ready || live) return;
     if (erase) {
       if (!canRemove) {
-        notify('地面は残して、その上のブロックを選んでね');
+        notify('高さ0の地面は残して、上下のブロックを選んでね');
         return;
       }
       commit(remove(world, hit));
@@ -205,7 +211,7 @@ export default function Game() {
           : `${pending.length}ブロック、いい感じ！`,
       );
       // Keep floor extensions at ground level so repeated placement grows sideways.
-      setSelection((p) => ({ ...p, y: p.y === 0 ? 0 : Math.min(15, p.y + 1) }));
+      setSelection((p) => ({ ...p, y: p.y === 0 ? 0 : Math.max(-VERTICAL_LIMIT, Math.min(VERTICAL_LIMIT, p.y + (p.y < 0 ? -1 : 1))) }));
     }
   }
   function undo() {
@@ -312,7 +318,10 @@ export default function Game() {
   useEffect(() => {
     if (!live) return;
     const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => clearInterval(timer);
+    const comments = setInterval(() => {
+      setComment((previous) => pickLiveComment(worldRef.current, nightRef.current, previous));
+    }, 4500);
+    return () => { clearInterval(timer); clearInterval(comments); };
   }, [live]);
   useEffect(() => {
     if (live && seconds >= 30) finishRef.current();
@@ -327,10 +336,13 @@ export default function Game() {
   }
   finishRef.current = finishLive;
   function startLive() {
+    setComment(pickLiveComment(worldRef.current, night));
+    setChatVisible(true);
+    setShowHint(false);
     setLive(true);
     setSeconds(0);
     setToolsOpen(false);
-    notify('あなたの島で、ライブがはじまります！');
+    setToast('');
     chime();
   }
   function download(url: string, name: string) {
@@ -356,8 +368,8 @@ export default function Game() {
     const move = (p: Point) => ({
       ...p,
       [axis]: Math.max(
-        axis === 'y' ? 0 : -HORIZONTAL_LIMIT,
-        Math.min(axis === 'y' ? 15 : HORIZONTAL_LIMIT, p[axis] + d),
+        axis === 'y' ? -VERTICAL_LIMIT : -HORIZONTAL_LIMIT,
+        Math.min(axis === 'y' ? VERTICAL_LIMIT : HORIZONTAL_LIMIT, p[axis] + d),
       ),
     });
     setSelection(move);
@@ -450,7 +462,7 @@ export default function Game() {
           </span>
         </div>
       </header>
-      <section className="playground" aria-label="建築ワールド">
+      <section className={`playground ${live ? 'is-live' : ''}`} aria-label="建築ワールド">
         <div ref={host} className="world-canvas" />
         {!ready && !error && (
           <div className="loading">
@@ -643,12 +655,14 @@ export default function Game() {
           </div>
         )}
         {live && (
-          <div className="live-panel glass-panel">
+          <div className={`live-panel glass-panel ${chatVisible ? '' : 'chat-hidden'}`}>
             <div>
               <span className="live-badge">
                 <span /> LIVE
               </span>
-              <strong>{30 - seconds}s</strong>
+              <strong>{Math.max(0, 30 - seconds)}s</strong>
+              <span className="live-visitors"><Users size={14} />{score.visitors}人</span>
+              <Button variant="ghost" className="chat-toggle" onClick={() => setChatVisible((v) => !v)} aria-expanded={chatVisible} aria-controls="live-comment">{chatVisible ? '隠す' : 'コメント'}</Button>
               <Button
                 variant="ghost"
                 className="icon-button"
@@ -658,20 +672,12 @@ export default function Game() {
                 <X />
               </Button>
             </div>
-            <h2>ようこそ、わたしの島へ。</h2>
-            <p>
-              <Users size={16} /> {score.visitors}人が遊びに来ています
-            </p>
-            <div className="chat-line">
-              <span>こはる</span>
-              {seconds < 10
-                ? 'この島、かわいい！'
-                : seconds < 20
-                  ? 'ステージの色、すき！'
-                  : 'また遊びに来るね！'}
+            {chatVisible && comment && <output id="live-comment" className="chat-line" aria-live="polite" aria-atomic="true">
+              <span>{comment.name}</span>
+              <span className="chat-message">{comment.text}</span>
               <Heart size={14} />
-            </div>
-            <small>ゲーム内の住人によるライブシミュレーション</small>
+            </output>}
+            <small>住民とのシミュレーション</small>
           </div>
         )}
         <div className="scene-caption">
@@ -873,6 +879,7 @@ export default function Game() {
               <ArrowDown size={14} />
             </button>
             <span className="height-label">高さ {selection.y}</span>
+            <button onClick={() => engine.current?.focus(erase ? hit : selection)} aria-label="選択位置を画面中央へ"><Crosshair size={14} /></button>
             <button onClick={() => nudge('y', -1)} aria-label="配置を一段下へ">
               <Minus size={14} />
             </button>

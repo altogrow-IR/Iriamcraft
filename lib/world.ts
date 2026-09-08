@@ -25,6 +25,7 @@ export const LIMIT = 6000;
 // Enough room for a continuous strip using the entire block budget, with
 // coordinates small enough to retain accurate GPU picking and rendering.
 export const HORIZONTAL_LIMIT = 8192;
+export const VERTICAL_LIMIT = 8192;
 export const ISLAND_AREA_SCALE = 2.5;
 export const ISLAND_RADIUS_X = Math.ceil(Math.sqrt(110 * ISLAND_AREA_SCALE));
 export const ISLAND_RADIUS_Z = Math.ceil(Math.sqrt(85 * ISLAND_AREA_SCALE));
@@ -55,8 +56,7 @@ export const inBounds = (p: Point) =>
   Number.isInteger(p.z) &&
   Math.abs(p.x) <= HORIZONTAL_LIMIT &&
   Math.abs(p.z) <= HORIZONTAL_LIMIT &&
-  p.y >= 0 &&
-  p.y <= 15;
+  Math.abs(p.y) <= VERTICAL_LIMIT;
 export const onIsland = (x: number, z: number) =>
   islandDistance(x, z) < 1;
 export function blueprint(
@@ -147,7 +147,7 @@ export function place(
       (b) => !inBounds(b) || !MATERIALS.some((m) => m.id === b.material),
     )
   )
-    return { world, error: `横方向は±${HORIZONTAL_LIMIT}マス・高さ16段まで建てられます` };
+    return { world, error: `横方向は±${HORIZONTAL_LIMIT}マス・高さは−${VERTICAL_LIMIT}〜${VERTICAL_LIMIT}まで建てられます` };
   if (new Set(additions.map(key)).size !== additions.length)
     return { world, error: '同じ場所に複数のブロックは置けません' };
   const occupied = new Set(world.blocks.map(key));

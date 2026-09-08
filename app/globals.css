@@ -2222,6 +2222,31 @@ button svg {
   .world-hint { bottom: 128px; }
 }
 .sky-tag { transform: none; }
+.build-dock.dock-live { display: none; }
+.live-panel.glass-panel {
+  top: auto; bottom: 16px; left: 16px; right: auto;
+  width: min(360px, calc(100% - 100px)); max-width: none; padding: 8px 12px;
+  border-radius: 14px;
+}
+.live-panel > div:first-child { gap: 8px; }
+.live-panel > div:first-child > .icon-button { width: 44px !important; height: 44px !important; margin-left: 0; }
+.live-visitors { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; white-space: nowrap; }
+.chat-toggle { margin-left: auto; min-height: 44px; padding: 0 8px !important; font-size: 12px; }
+.live-panel .chat-line { margin: 0 0 4px; padding: 8px; min-height: 44px; }
+.live-panel .chat-line > span:first-child { flex-shrink: 0; font-size: 12px; font-weight: 700; color: #925476; }
+.live-panel .chat-message { font-size: 12px; color: #534c61; line-height: 1.5; overflow-wrap: anywhere; }
+.live-panel .chat-line svg { flex-shrink: 0; }
+.live-panel > small { display: block; font-size: 10px; }
+.live-panel.chat-hidden > small { display: none; }
+@media (max-width: 760px) {
+  .live-panel.glass-panel { bottom: calc(12px + env(safe-area-inset-bottom)); left: 10px; width: calc(100% - 20px); padding: 4px 10px 6px; }
+  .is-live .orbit-tools { bottom: calc(156px + env(safe-area-inset-bottom)); }
+  .position-controls { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); width: 100%; }
+  .position-controls > svg { display: none; }
+  .position-controls > span:first-of-type { grid-column: span 2; margin-right: 0; }
+  .position-controls .height-label { grid-column: span 3; text-align: right; padding-right: 8px; }
+  .position-controls button { width: 100%; min-width: 44px; }
+}
 @media (min-width: 761px) {
   .quest-card { top: 100px; }
 }

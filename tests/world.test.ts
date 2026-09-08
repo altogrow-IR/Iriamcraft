@@ -12,6 +12,7 @@ import {
   liveScore,
   expandGround,
   HORIZONTAL_LIMIT,
+  VERTICAL_LIMIT,
   LIMIT,
 } from '../lib/world.ts';
 void test('starter ground is approximately 2.5 times the previous area', () => {
@@ -21,6 +22,32 @@ void test('starter ground is approximately 2.5 times the previous area', () => {
       if (x * x / 110 + z * z / 85 < 1) oldArea++;
   const area = initialWorld().blocks.filter((b) => b.y === 0).length;
   assert.ok(area / oldArea > 2.45 && area / oldArea < 2.55);
+});
+void test('connected columns extend above 15 and below -1 with save and removal support', () => {
+  for (const direction of [-1, 1]) {
+    let w = { ...initialWorld(), blocks: [{ x: 0, y: 0, z: 0, material: 'grass' as const }] };
+    for (let n = 1; n <= 160; n++) {
+      const result = place(w, [{ x: 0, y: n * direction, z: 0, material: 'grass' }]);
+      assert.equal(result.error, undefined);
+      w = result.world as typeof w;
+    }
+    assert.deepEqual(parseWorld(JSON.stringify(w)), w);
+    assert.equal(remove(w, { x: 0, y: 160 * direction, z: 0 }).blocks.length, 160);
+  }
+});
+void test('vertical boundaries allow connected placement and reject crossing blueprints atomically', () => {
+  for (const direction of [-1, 1]) {
+    const y = direction * VERTICAL_LIMIT;
+    const w = { ...initialWorld(), blocks: [{ x: 0, y: y - direction, z: 0, material: 'wood' as const }] };
+    const result = place(w, [{ x: 0, y, z: 0, material: 'wood' }]);
+    assert.equal(result.error, undefined);
+    assert.deepEqual(parseWorld(JSON.stringify(result.world)), result.world);
+    assert.ok(place(result.world, [{ x: 0, y: y + direction, z: 0, material: 'wood' }]).error);
+    assert.throws(() => parseWorld(JSON.stringify({ ...w, blocks: [{ x: 0, y: y + direction, z: 0, material: 'wood' }] })));
+    const invalid = place(w, blueprint('tree', { x: 0, y: direction > 0 ? y - 2 : y - 1, z: 0 }));
+    assert.ok(invalid.error);
+    assert.equal(invalid.world, w);
+  }
 });
 void test('connected floors extend in all horizontal directions beyond the old boundary', () => {
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {

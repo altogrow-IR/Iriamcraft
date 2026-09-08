@@ -1,4 +1,4 @@
-import { inBounds, MATERIALS, type Block, type World } from './world';
+import { inBounds, MATERIALS, HORIZONTAL_LIMIT, VERTICAL_LIMIT, type Block, type World } from './world';
 type ModelContext = {
   registerTool: (
     tool: {
@@ -56,9 +56,9 @@ export function registerWorldTools(
           items: {
             type: 'object',
             properties: {
-              x: { type: 'integer', minimum: -14, maximum: 14 },
-              y: { type: 'integer', minimum: 0, maximum: 15 },
-              z: { type: 'integer', minimum: -14, maximum: 14 },
+              x: { type: 'integer', minimum: -HORIZONTAL_LIMIT, maximum: HORIZONTAL_LIMIT },
+              y: { type: 'integer', minimum: -VERTICAL_LIMIT, maximum: VERTICAL_LIMIT },
+              z: { type: 'integer', minimum: -HORIZONTAL_LIMIT, maximum: HORIZONTAL_LIMIT },
               material: { type: 'string', enum: MATERIALS.map((m) => m.id) },
             },
             required: ['x', 'y', 'z', 'material'],

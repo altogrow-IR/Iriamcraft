@@ -9,6 +9,7 @@ import {
   ISLAND_RADIUS_Z,
   islandDistance,
   HORIZONTAL_LIMIT,
+  VERTICAL_LIMIT,
   type Block,
   type Point,
 } from '@/lib/world';
@@ -16,9 +17,10 @@ import {
 export class IslandEngine {
   private scene = new THREE.Scene();
   private renderer: THREE.WebGLRenderer;
-  private camera = new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, 250);
+  private camera = new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, HORIZONTAL_LIMIT * 4);
   private controls: OrbitControls;
   private voxels: THREE.InstancedMesh;
+  private foundation?: THREE.InstancedMesh;
   private ghost: THREE.InstancedMesh;
   private blocks: Block[] = [];
   private resizeObserver: ResizeObserver;
@@ -67,10 +69,10 @@ export class IslandEngine {
     this.controls.target.set(0, 1.3, 0);
     this.controls.enableDamping = true;
     this.controls.minPolarAngle = 0.25;
-    this.controls.maxPolarAngle = Math.PI / 2.15;
+    this.controls.maxPolarAngle = Math.PI - 0.25;
     this.controls.minZoom = 0.55;
     this.controls.maxZoom = 3;
-    this.controls.maxTargetRadius = HORIZONTAL_LIMIT * Math.SQRT2;
+    this.controls.maxTargetRadius = Math.hypot(HORIZONTAL_LIMIT, HORIZONTAL_LIMIT, VERTICAL_LIMIT);
     this.controls.touches.ONE = THREE.TOUCH.ROTATE;
     this.controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
     this.ambient = new THREE.HemisphereLight(0xe8faff, 0x8e7cb1, 2.3);
@@ -266,6 +268,7 @@ export class IslandEngine {
         new THREE.Color(p.color).multiplyScalar(1 + (i % 5) * 0.016),
       );
     });
+    this.foundation = mesh;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
@@ -352,6 +355,8 @@ export class IslandEngine {
     this.voxels.computeBoundingSphere();
   }
   setGhost(blocks: Point[], valid = true, erase = false) {
+    // Hide the decorative underside while building below the ground.
+    if (this.foundation) this.foundation.visible = !this.blocks.some((b) => b.y < 0) && !blocks.some((b) => b.y < 0);
     this.ghost.count = Math.min(blocks.length, 200);
     const matrix = new THREE.Matrix4();
     blocks.slice(0, 200).forEach((p, i) => {
@@ -386,6 +391,13 @@ export class IslandEngine {
   zoom(delta: number) {
     this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom + delta, 0.55, 3);
     this.camera.updateProjectionMatrix();
+  }
+  focus(p: Point) {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    if (p.y < 0) offset.y = -Math.abs(offset.y);
+    this.controls.target.set(p.x, p.y, p.z);
+    this.camera.position.copy(this.controls.target).add(offset);
+    this.controls.update();
   }
   home() {
     this.controls.target.set(0, 1.3, 0);
