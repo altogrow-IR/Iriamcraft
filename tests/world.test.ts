@@ -1,3 +1,4 @@
+import { normalizeBlock } from '../lib/block-types.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Node executes the TypeScript source directly for these pure rules.
@@ -13,52 +14,85 @@ import {
   expandGround,
   HORIZONTAL_LIMIT,
   VERTICAL_LIMIT,
-  LIMIT,
 } from '../lib/world.ts';
 void test('starter ground is approximately 2.5 times the previous area', () => {
   let oldArea = 0;
   for (let x = -10; x <= 10; x++)
     for (let z = -9; z <= 9; z++)
-      if (x * x / 110 + z * z / 85 < 1) oldArea++;
+      if ((x * x) / 110 + (z * z) / 85 < 1) oldArea++;
   const area = initialWorld().blocks.filter((b) => b.y === 0).length;
   assert.ok(area / oldArea > 2.45 && area / oldArea < 2.55);
 });
 void test('connected columns extend above 15 and below -1 with save and removal support', () => {
   for (const direction of [-1, 1]) {
-    let w = { ...initialWorld(), blocks: [{ x: 0, y: 0, z: 0, material: 'grass' as const }] };
+    let w = {
+      ...initialWorld(),
+      blocks: [normalizeBlock({ x: 0, y: 0, z: 0, material: 'grass' })],
+    };
     for (let n = 1; n <= 160; n++) {
-      const result = place(w, [{ x: 0, y: n * direction, z: 0, material: 'grass' }]);
+      const result = place(w, [
+        { x: 0, y: n * direction, z: 0, material: 'grass' },
+      ]);
       assert.equal(result.error, undefined);
       w = result.world as typeof w;
     }
     assert.deepEqual(parseWorld(JSON.stringify(w)), w);
-    assert.equal(remove(w, { x: 0, y: 160 * direction, z: 0 }).blocks.length, 160);
+    assert.equal(
+      remove(w, { x: 0, y: 160 * direction, z: 0 }).blocks.length,
+      160,
+    );
   }
 });
 void test('vertical boundaries allow connected placement and reject crossing blueprints atomically', () => {
   for (const direction of [-1, 1]) {
     const y = direction * VERTICAL_LIMIT;
-    const w = { ...initialWorld(), blocks: [{ x: 0, y: y - direction, z: 0, material: 'wood' as const }] };
+    const w = {
+      ...initialWorld(),
+      blocks: [
+        normalizeBlock({ x: 0, y: y - direction, z: 0, material: 'wood' }),
+      ],
+    };
     const result = place(w, [{ x: 0, y, z: 0, material: 'wood' }]);
     assert.equal(result.error, undefined);
     assert.deepEqual(parseWorld(JSON.stringify(result.world)), result.world);
-    assert.ok(place(result.world, [{ x: 0, y: y + direction, z: 0, material: 'wood' }]).error);
-    assert.throws(() => parseWorld(JSON.stringify({ ...w, blocks: [{ x: 0, y: y + direction, z: 0, material: 'wood' }] })));
-    const invalid = place(w, blueprint('tree', { x: 0, y: direction > 0 ? y - 2 : y - 1, z: 0 }));
+    assert.ok(
+      place(result.world, [{ x: 0, y: y + direction, z: 0, material: 'wood' }])
+        .error,
+    );
+    assert.throws(() =>
+      parseWorld(
+        JSON.stringify({
+          ...w,
+          blocks: [{ x: 0, y: y + direction, z: 0, material: 'wood' }],
+        }),
+      ),
+    );
+    const invalid = place(
+      w,
+      blueprint('tree', { x: 0, y: direction > 0 ? y - 2 : y - 1, z: 0 }),
+    );
     assert.ok(invalid.error);
     assert.equal(invalid.world, w);
   }
 });
 void test('connected floors extend in all horizontal directions beyond the old boundary', () => {
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  for (const [dx, dz] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ]) {
     let w = initialWorld();
     for (let i = 17; i <= 150; i++) {
       // Start at the existing edge, including any missing cells before 17.
-      if (i === 17) for (let n = 14; n < 17; n++) {
-        const b = { x: n * dx, y: 0, z: n * dz, material: 'grass' as const };
-        if (!w.blocks.some((p) => key(p) === key(b))) w = place(w, [b]).world;
-      }
-      const result = place(w, [{ x: i * dx, y: 0, z: i * dz, material: 'grass' }]);
+      if (i === 17)
+        for (let n = 14; n < 17; n++) {
+          const b = { x: n * dx, y: 0, z: n * dz, material: 'grass' as const };
+          if (!w.blocks.some((p) => key(p) === key(b))) w = place(w, [b]).world;
+        }
+      const result = place(w, [
+        { x: i * dx, y: 0, z: i * dz, material: 'grass' },
+      ]);
       assert.equal(result.error, undefined);
       w = result.world;
     }
@@ -67,7 +101,13 @@ void test('connected floors extend in all horizontal directions beyond the old b
 });
 void test('expanding an old save preserves buildings, progress and original data', () => {
   const starter = initialWorld();
-  const old = { ...starter, blocks: starter.blocks.filter((b) => b.y > 0 || b.x * b.x / 110 + b.z * b.z / 85 < 1), placed: 23 };
+  const old = {
+    ...starter,
+    blocks: starter.blocks.filter(
+      (b) => b.y > 0 || (b.x * b.x) / 110 + (b.z * b.z) / 85 < 1,
+    ),
+    placed: 23,
+  };
   const expanded = expandGround(old);
   assert.equal(expanded.error, undefined);
   assert.equal(expanded.world.placed, 23);
@@ -75,13 +115,30 @@ void test('expanding an old save preserves buildings, progress and original data
   assert.ok(expanded.world.blocks.length > old.blocks.length);
   assert.ok(expandGround(expanded.world).error);
 });
-void test('extension still enforces GPU-safe coordinates and total block budget', () => {
+void test('coordinates remain GPU safe without a fixed block count limit', () => {
   const starter = initialWorld();
-  assert.ok(place(starter, [{ x: HORIZONTAL_LIMIT + 1, y: 0, z: 0, material: 'grass' }]).error);
-  const full = { ...starter, blocks: Array.from({ length: LIMIT }, (_, x) => ({ x, y: 0, z: 0, material: 'grass' as const })) };
-  assert.ok(place(full, [{ x: LIMIT, y: 0, z: 0, material: 'grass' }]).error);
-  assert.equal(expandGround(full).world, full);
-  assert.ok(expandGround(full).error);
+  assert.ok(
+    place(starter, [{ x: HORIZONTAL_LIMIT + 1, y: 0, z: 0, material: 'grass' }])
+      .error,
+  );
+  for (const count of [10000, 20000, 50000]) {
+    const blocks = Array.from({ length: count }, (_, i) =>
+      normalizeBlock({
+        x: i % 250,
+        y: 0,
+        z: Math.floor(i / 250),
+        material: 'grass',
+      }),
+    );
+    const world = { ...starter, blocks };
+    const result = place(world, [{ x: 0, y: 1, z: 0, material: 'white' }]);
+    assert.equal(result.error, undefined);
+    assert.equal(result.world.blocks.length, count + 1);
+    assert.equal(
+      parseWorld(JSON.stringify(result.world)).blocks.length,
+      count + 1,
+    );
+  }
 });
 void test('starter island roundtrips without losing any blocks', () => {
   const w = initialWorld();
@@ -105,7 +162,10 @@ void test('ground blocks can be removed and replaced at height zero', () => {
   const point = { x: 0, y: 0, z: 0 };
   const withoutFloor = remove(world, point);
 
-  assert.equal(withoutFloor.blocks.some((block) => key(block) === key(point)), false);
+  assert.equal(
+    withoutFloor.blocks.some((block) => key(block) === key(point)),
+    false,
+  );
 
   const replaced = place(withoutFloor, [{ ...point, material: 'pink' }]);
   assert.equal(replaced.error, undefined);
@@ -144,7 +204,7 @@ void test('corrupt, incompatible, oversized and duplicate saves fail intentional
   for (const value of [
     null,
     {},
-    { ...w, version: 2 },
+    { ...w, version: 3 },
     { ...w, placed: -1 },
     { ...w, blocks: [null] },
     { ...w, blocks: [w.blocks[0], w.blocks[0]] },
@@ -159,4 +219,3 @@ void test('more building increases live response within the visitor limit', () =
   assert.ok(liveScore({ ...w, placed: 100 }).stars > liveScore(w).stars);
   assert.ok(liveScore({ ...w, placed: 10000 }).visitors <= 24);
 });
-

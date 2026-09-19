@@ -1,29 +1,21 @@
-export type MaterialId =
-  | 'grass'
-  | 'wood'
-  | 'white'
-  | 'pink'
-  | 'aqua'
-  | 'glass'
-  | 'leaf'
-  | 'light'
-  | 'stone'
-  | 'water'
-  | 'sand';
-export type Block = { x: number; y: number; z: number; material: MaterialId };
-export type Point = Pick<Block, 'x' | 'y' | 'z'>;
+import { MATERIALS, type MaterialId } from './materials.ts';
+import {
+  cells,
+  normalizeBlock,
+  validBlock,
+  type Block,
+  type Point,
+} from './block-types.ts';
+export { MATERIALS, type MaterialId, type Block, type Point };
 export type Brush = 'single' | 'line' | 'floor';
 export type Blueprint = 'stage' | 'tree' | 'bench' | 'arch';
 export type World = {
-  version: 1;
+  version: 2;
   blocks: Block[];
   placed: number;
   shows: number;
   name: string;
 };
-export const LIMIT = 6000;
-// Enough room for a continuous strip using the entire block budget, with
-// coordinates small enough to retain accurate GPU picking and rendering.
 export const HORIZONTAL_LIMIT = 8192;
 export const VERTICAL_LIMIT = 8192;
 export const ISLAND_AREA_SCALE = 2.5;
@@ -31,24 +23,6 @@ export const ISLAND_RADIUS_X = Math.ceil(Math.sqrt(110 * ISLAND_AREA_SCALE));
 export const ISLAND_RADIUS_Z = Math.ceil(Math.sqrt(85 * ISLAND_AREA_SCALE));
 export const islandDistance = (x: number, z: number) =>
   (x * x) / (110 * ISLAND_AREA_SCALE) + (z * z) / (85 * ISLAND_AREA_SCALE);
-export const MATERIALS: {
-  id: MaterialId;
-  name: string;
-  color: string;
-  category: '基本' | 'カラー' | '自然';
-}[] = [
-  { id: 'grass', name: '芝生', color: '#8cccad', category: '自然' },
-  { id: 'wood', name: 'ウッド', color: '#c7a27c', category: '基本' },
-  { id: 'white', name: '白レンガ', color: '#f3eee5', category: '基本' },
-  { id: 'pink', name: 'さくら', color: '#f4a8c4', category: 'カラー' },
-  { id: 'aqua', name: 'ミント', color: '#68cbd2', category: 'カラー' },
-  { id: 'glass', name: 'ガラス', color: '#b8e6ee', category: '基本' },
-  { id: 'light', name: '星あかり', color: '#ffda86', category: 'カラー' },
-  { id: 'leaf', name: '木の葉', color: '#58ad94', category: '自然' },
-  { id: 'stone', name: '石', color: '#a2abc0', category: '基本' },
-  { id: 'water', name: '水', color: '#68c7e7', category: '自然' },
-  { id: 'sand', name: '砂', color: '#ead5ad', category: '自然' },
-];
 export const key = (p: Point) => `${p.x},${p.y},${p.z}`;
 export const inBounds = (p: Point) =>
   Number.isInteger(p.x) &&
@@ -57,8 +31,7 @@ export const inBounds = (p: Point) =>
   Math.abs(p.x) <= HORIZONTAL_LIMIT &&
   Math.abs(p.z) <= HORIZONTAL_LIMIT &&
   Math.abs(p.y) <= VERTICAL_LIMIT;
-export const onIsland = (x: number, z: number) =>
-  islandDistance(x, z) < 1;
+export const onIsland = (x: number, z: number) => islandDistance(x, z) < 1;
 export function blueprint(
   type: Blueprint,
   origin: Point,
@@ -110,7 +83,7 @@ export function blueprint(
     for (let x = -3; x <= 3; x++) add(x, 5, -2, x === 0 ? 'light' : 'aqua');
     for (let x = -2; x <= 2; x++) add(x, 1, -2, 'aqua');
   }
-  return [...new Map(result.map((b) => [key(b), b])).values()];
+  return [...new Map(result.map((b) => [key(b), normalizeBlock(b)])).values()];
 }
 export function brushBlocks(
   origin: Point,
@@ -135,7 +108,7 @@ export function brushBlocks(
         z: origin.z + (rotation % 2 ? x : z),
         material,
       });
-  return blocks;
+  return blocks.map(normalizeBlock);
 }
 export function place(
   world: World,
@@ -144,20 +117,25 @@ export function place(
   if (
     !additions.length ||
     additions.some(
-      (b) => !inBounds(b) || !MATERIALS.some((m) => m.id === b.material),
+      (b) =>
+        !inBounds(b) || !validBlock(b) || cells(b).some((c) => !inBounds(c)),
     )
   )
-    return { world, error: `横方向は±${HORIZONTAL_LIMIT}マス・高さは−${VERTICAL_LIMIT}〜${VERTICAL_LIMIT}まで建てられます` };
-  if (new Set(additions.map(key)).size !== additions.length)
+    return {
+      world,
+      error: `横方向は±${HORIZONTAL_LIMIT}マス・高さは−${VERTICAL_LIMIT}〜${VERTICAL_LIMIT}まで建てられます`,
+    };
+  if (
+    new Set(additions.flatMap(cells).map(key)).size !==
+    additions.flatMap(cells).length
+  )
     return { world, error: '同じ場所に複数のブロックは置けません' };
-  const occupied = new Set(world.blocks.map(key));
-  if (additions.some((b) => occupied.has(key(b))))
+  const occupied = new Set(world.blocks.flatMap(cells).map(key));
+  if (additions.flatMap(cells).some((b) => occupied.has(key(b))))
     return {
       world,
       error: 'ほかのブロックと重なっています。場所や高さを変えてみよう',
     };
-  if (world.blocks.length + additions.length > LIMIT)
-    return { world, error: '島がいっぱいです。ブロックを整理してみよう' };
   if (
     !additions.some(
       (b) =>
@@ -178,25 +156,33 @@ export function place(
   return {
     world: {
       ...world,
-      blocks: [...world.blocks, ...additions],
+      blocks: [...world.blocks, ...additions.map(normalizeBlock)],
       placed: world.placed + additions.length,
     },
   };
 }
 export function remove(world: World, p: Point): World {
-  return { ...world, blocks: world.blocks.filter((b) => key(b) !== key(p)) };
+  return {
+    ...world,
+    blocks: world.blocks.filter(
+      (b) => !cells(b).some((c) => key(c) === key(p)),
+    ),
+  };
 }
 export function expandGround(world: World): { world: World; error?: string } {
-  const occupied = new Set(world.blocks.map(key));
+  const occupied = new Set(world.blocks.flatMap(cells).map(key));
   const additions: Block[] = [];
   for (let x = -ISLAND_RADIUS_X; x <= ISLAND_RADIUS_X; x++)
     for (let z = -ISLAND_RADIUS_Z; z <= ISLAND_RADIUS_Z; z++)
       if (onIsland(x, z) && !occupied.has(key({ x, y: 0, z })))
         additions.push({ x, y: 0, z, material: 'grass' });
   if (!additions.length) return { world, error: '床はすでに広がっています' };
-  if (world.blocks.length + additions.length > LIMIT)
-    return { world, error: '床を広げる空きがありません。ブロックを整理してみよう' };
-  return { world: { ...world, blocks: [...world.blocks, ...additions] } };
+  return {
+    world: {
+      ...world,
+      blocks: [...world.blocks, ...additions.map(normalizeBlock)],
+    },
+  };
 }
 export function initialWorld(): World {
   const map = new Map<string, Block>();
@@ -244,8 +230,8 @@ export function initialWorld(): World {
     add(p.x, 2, p.z, 'light');
   }
   return {
-    version: 1,
-    blocks: [...map.values()],
+    version: 2,
+    blocks: [...map.values()].map(normalizeBlock),
     placed: 0,
     shows: 0,
     name: 'はじまりの浮島',
@@ -254,11 +240,11 @@ export function initialWorld(): World {
 export function parseWorld(raw: string): World {
   const v: unknown = JSON.parse(raw);
   if (!v || typeof v !== 'object') throw Error('保存形式を確認してください');
-  const w = v as World;
+  const w = v as World,
+    version = (v as { version: number }).version;
   if (
-    w.version !== 1 ||
+    (version !== 1 && version !== 2) ||
     !Array.isArray(w.blocks) ||
-    w.blocks.length > LIMIT ||
     !Number.isSafeInteger(w.placed) ||
     w.placed < 0 ||
     !Number.isSafeInteger(w.shows) ||
@@ -267,25 +253,21 @@ export function parseWorld(raw: string): World {
     w.name.length > 40
   )
     throw Error('対応していない保存データです');
-  if (
-    w.blocks.some(
-      (b) => !b || !inBounds(b) || !MATERIALS.some((m) => m.id === b.material),
-    ) ||
-    new Set(w.blocks.map(key)).size !== w.blocks.length
-  )
-    throw Error('ブロックデータを読み込めません');
-  return {
-    version: 1,
-    blocks: w.blocks.map((b) => ({
-      x: b.x,
-      y: b.y,
-      z: b.z,
-      material: b.material,
-    })),
-    placed: w.placed,
-    shows: w.shows,
-    name: w.name,
-  };
+  const occupied = new Set<string>();
+  const blocks = w.blocks.map((b) => {
+    if (!b || !inBounds(b) || !validBlock(b, version === 2))
+      throw Error('ブロックデータを読み込めません');
+    const block = normalizeBlock(
+      version === 1 ? { x: b.x, y: b.y, z: b.z, material: b.material } : b,
+    );
+    for (const c of cells(block)) {
+      if (!inBounds(c) || occupied.has(key(c)))
+        throw Error('ブロックが重複・範囲外です');
+      occupied.add(key(c));
+    }
+    return block;
+  });
+  return { version: 2, blocks, placed: w.placed, shows: w.shows, name: w.name };
 }
 export function liveScore(world: World) {
   const variety = new Set(

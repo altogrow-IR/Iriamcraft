@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import {
   Box,
   Layers3,
@@ -70,7 +70,22 @@ import { pickLiveComment, type LiveComment } from '@/lib/live-comments';
 import { IslandEngine } from './engine';
 import { registerWorldTools } from '@/lib/webmcp';
 
-const SAVE_KEY = 'iriamcraft-world-v1';
+import { MaterialPicker } from './MaterialPicker';
+import {
+  cells,
+  shapeOf,
+  rotateBlock,
+  ZERO,
+  type BlockShape,
+  type QuarterTurn,
+} from '@/lib/block-types';
+import {
+  difference,
+  applyHistory,
+  blocksInRange,
+  type HistoryCommand,
+} from '@/lib/history';
+import { loadWorld, saveWorld } from '@/lib/storage';
 const BLUEPRINTS = [
   {
     id: 'stage' as const,
@@ -127,22 +142,74 @@ export default function Game() {
   const [toast, setToast] = useState(''),
     [saved, setSaved] = useState('保存済み'),
     [showHint, setShowHint] = useState(true);
-  const [history, setHistory] = useState<World[]>([]),
-    [future, setFuture] = useState<World[]>([]);
+  const [history, setHistory] = useState<HistoryCommand[]>([]),
+    [future, setFuture] = useState<HistoryCommand[]>([]);
   const fileInput = useRef<HTMLInputElement>(null),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null),
     audio = useRef<AudioContext | null>(null);
   const saveAllowed = useRef(true);
+  const loadedRef = useRef(loaded);
+  loadedRef.current = loaded;
   const liveRef = useRef(live);
   liveRef.current = live;
   const finishRef = useRef(() => {});
-  const pending =
-    tab === 'blueprints'
-      ? blueprint(plan, selection, rotation)
-      : brushBlocks(selection, material, brush, rotation);
-  const validation = place(world, pending),
-    score = liveScore(world);
-  const canRemove = world.blocks.some((b) => key(b) === key(hit));
+  const [shape, setShape] = useState<BlockShape>('cube');
+  const [rangeMode, setRangeMode] = useState(false);
+  const [rangeStart, setRangeStart] = useState<Point>();
+  const [rangeEnd, setRangeEnd] = useState<Point>();
+  const [focusHint, setFocusHint] = useState(false);
+  const selectRef = useRef<(p: Point) => void>(() => {});
+  const rotateRef = useRef<
+    (p: Point, axis: 'x' | 'y', direction: number) => void
+  >(() => {});
+  const selectedBlock = useMemo(
+    () => world.blocks.find((b) => cells(b).some((c) => key(c) === key(hit))),
+    [world.blocks, hit],
+  );
+  const rangeBlocks = useMemo(
+    () =>
+      rangeStart && rangeEnd ? blocksInRange(world, rangeStart, rangeEnd) : [],
+    [world, rangeStart, rangeEnd],
+  );
+  selectRef.current = (p) => {
+    if (rangeMode) {
+      if (!rangeStart || rangeEnd) {
+        setRangeStart(p);
+        setRangeEnd(undefined);
+        notify('ここから。もう1点をタップしてください');
+      } else setRangeEnd(p);
+    }
+  };
+  rotateRef.current = (p, axis, direction) => {
+    if (liveRef.current || rangeMode || erase || !loaded) return;
+    const b = worldRef.current.blocks.find((b) => key(b) === key(p));
+    if (!b) return;
+    const next = rotateBlock(b, axis, direction);
+    if (next === b) {
+      notify('この形はこの方向に回転しません');
+      return;
+    }
+    commit({
+      ...worldRef.current,
+      blocks: worldRef.current.blocks.map((item) => (item === b ? next : item)),
+    });
+    notify('↻ 90° 回転しました');
+  };
+  const pending = useMemo(
+    () =>
+      tab === 'blueprints'
+        ? blueprint(plan, selection, rotation)
+        : brushBlocks(selection, material, brush, rotation).map((b) => ({
+            ...b,
+            shape,
+            rotation: { ...ZERO, y: rotation as QuarterTurn },
+            ...(shape === 'door' ? { open: false } : {}),
+          })),
+    [tab, plan, selection, rotation, material, brush, shape],
+  );
+  const validation = useMemo(() => place(world, pending), [world, pending]),
+    score = useMemo(() => liveScore(world), [world]);
+  const canRemove = !!selectedBlock;
   const level = 1 + Math.floor(world.placed / 50);
   function notify(message: string) {
     setToast(message);
@@ -179,9 +246,10 @@ export default function Game() {
     }
   }
   function commit(next: World) {
+    if (!loadedRef.current || liveRef.current) return;
     saveAllowed.current = true;
     const previous = worldRef.current;
-    setHistory((h) => [...h.slice(-39), previous]);
+    setHistory((h) => [...h.slice(-39), difference(previous, next)]);
     setFuture([]);
     worldRef.current = next;
     setWorld(next);
@@ -189,7 +257,26 @@ export default function Game() {
       engine.current?.celebrate(next.blocks.at(-1)!);
   }
   function build() {
-    if (!ready || live) return;
+    if (!ready || !loaded || live) return;
+    if (rangeMode) {
+      if (!rangeStart || !rangeEnd) {
+        notify('範囲の両端をタップしてください');
+        return;
+      }
+      if (!rangeBlocks.length) {
+        notify('この範囲にブロックはありません');
+        return;
+      }
+      const removed = new Set(rangeBlocks.map(key));
+      commit({
+        ...world,
+        blocks: world.blocks.filter((b) => !removed.has(key(b))),
+      });
+      notify(`${rangeBlocks.length}ブロックを削除しました。戻すで復元できます`);
+      setRangeStart(undefined);
+      setRangeEnd(undefined);
+      return;
+    }
     if (erase) {
       if (!canRemove) {
         notify('取り外すブロックを選んでね');
@@ -211,52 +298,76 @@ export default function Game() {
           : `${pending.length}ブロック、いい感じ！`,
       );
       // Keep floor extensions at ground level so repeated placement grows sideways.
-      setSelection((p) => ({ ...p, y: p.y === 0 ? 0 : Math.max(-VERTICAL_LIMIT, Math.min(VERTICAL_LIMIT, p.y + (p.y < 0 ? -1 : 1))) }));
+      setSelection((p) => ({
+        ...p,
+        y:
+          p.y === 0
+            ? 0
+            : Math.max(
+                -VERTICAL_LIMIT,
+                Math.min(VERTICAL_LIMIT, p.y + (p.y < 0 ? -1 : 1)),
+              ),
+      }));
     }
   }
   function undo() {
     const prev = history.at(-1);
     if (!prev || live) return;
-    setFuture((f) => [worldRef.current, ...f]);
+    setFuture((f) => [prev, ...f]);
     setHistory((h) => h.slice(0, -1));
-    worldRef.current = prev;
-    setWorld(prev);
+    const restored = applyHistory(worldRef.current, prev, true);
+    worldRef.current = restored;
+    setWorld(restored);
     notify('ひとつ前に戻しました');
   }
   function redo() {
     const next = future[0];
     if (!next || live) return;
-    setHistory((h) => [...h, worldRef.current]);
+    setHistory((h) => [...h, next]);
     setFuture((f) => f.slice(1));
-    worldRef.current = next;
-    setWorld(next);
+    const restored = applyHistory(worldRef.current, next);
+    worldRef.current = restored;
+    setWorld(restored);
   }
   useEffect(() => {
+    let cancelled = false;
+    void loadWorld()
+      .then((w) => {
+        if (cancelled) return;
+        if (w) {
+          setWorld(w);
+          worldRef.current = w;
+          setShowHint(w.placed === 0);
+        }
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        saveAllowed.current = false;
+        setLoaded(true);
+        setSaved('保存データを確認');
+        notify(
+          '保存を読み込めません。元データは保持しています。設定からJSONを保存・復元できます',
+        );
+      });
     try {
-      const raw = localStorage.getItem(SAVE_KEY);
-      if (raw) {
-        const w = parseWorld(raw);
-        setWorld(w);
-        worldRef.current = w;
-        setShowHint(w.placed === 0);
-      }
+      setFocusHint(localStorage.getItem('iriamcraft-focus-help') !== 'seen');
     } catch {
-      saveAllowed.current = false;
-      setSaved('保存データを確認');
-      notify(
-        '保存データを読み込めませんでした。設定からバックアップを読み込めます',
-      );
+      setFocusHint(true);
     }
-    setLoaded(true);
     if (!host.current) return;
     const fail = (e: Event) => setError((e as CustomEvent<string>).detail);
     host.current.addEventListener('island-error', fail);
     try {
       const e = new IslandEngine(host.current, (p, n) => {
         setHit(p);
+        selectRef.current(p);
         setSelection({ x: p.x + n.x, y: p.y + n.y, z: p.z + n.z });
       });
       engine.current = e;
+      e.onRotate = (p, axis, direction) =>
+        rotateRef.current(p, axis, direction);
+      e.onRotationPreview = () => notify('↻ 90° 指を離すと回転');
       e.setBlocks(worldRef.current.blocks);
       setReady(true);
     } catch {
@@ -266,6 +377,7 @@ export default function Game() {
     }
     const node = host.current;
     return () => {
+      cancelled = true;
       engine.current?.dispose();
       engine.current = null;
       node.removeEventListener('island-error', fail);
@@ -283,7 +395,7 @@ export default function Game() {
       registerWorldTools(
         () => worldRef.current,
         (blocks) => {
-          if (liveRef.current)
+          if (!loadedRef.current || liveRef.current)
             return { error: 'ライブ中は建築をお休みしています', count: 0 };
           const result = place(worldRef.current, blocks);
           if (result.error) return { error: result.error, count: 0 };
@@ -295,11 +407,31 @@ export default function Game() {
   );
   useEffect(() => {
     engine.current?.setGhost(
-      live ? [] : erase ? [hit] : pending,
+      live || rangeMode ? [] : erase ? [selectedBlock ?? hit] : pending,
       erase ? canRemove : !validation.error,
       erase,
     );
-  }, [pending, hit, erase, live, canRemove, validation.error]);
+  }, [
+    pending,
+    hit,
+    erase,
+    live,
+    canRemove,
+    validation.error,
+    rangeMode,
+    selectedBlock,
+  ]);
+  useEffect(() => {
+    engine.current?.setSelected(
+      live || rangeMode || erase ? undefined : selectedBlock,
+    );
+  }, [selectedBlock, live, rangeMode, erase]);
+  useEffect(() => {
+    engine.current?.setRange(
+      live ? undefined : rangeStart,
+      rangeEnd ?? rangeStart,
+    );
+  }, [rangeStart, rangeEnd, live]);
   useEffect(() => {
     engine.current?.setNight(night);
   }, [night]);
@@ -308,20 +440,31 @@ export default function Game() {
   }, [live, score.visitors]);
   useEffect(() => {
     if (!loaded || !saveAllowed.current) return;
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(world));
-      setSaved('保存済み');
-    } catch {
-      setSaved('保存できません');
-    }
+    let current = true;
+    setSaved('保存中…');
+    void saveWorld(world)
+      .then(() => {
+        if (current) setSaved('保存済み');
+      })
+      .catch(() => {
+        if (current) setSaved('保存できません・JSON保存を');
+      });
+    return () => {
+      current = false;
+    };
   }, [world, loaded]);
   useEffect(() => {
     if (!live) return;
     const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
     const comments = setInterval(() => {
-      setComment((previous) => pickLiveComment(worldRef.current, nightRef.current, previous));
+      setComment((previous) =>
+        pickLiveComment(worldRef.current, nightRef.current, previous),
+      );
     }, 4500);
-    return () => { clearInterval(timer); clearInterval(comments); };
+    return () => {
+      clearInterval(timer);
+      clearInterval(comments);
+    };
   }, [live]);
   useEffect(() => {
     if (live && seconds >= 30) finishRef.current();
@@ -396,9 +539,17 @@ export default function Game() {
       }
       if (e.key === 'Escape') {
         setErase(false);
+        setRangeMode(false);
+        setRangeStart(undefined);
+        setRangeEnd(undefined);
         setToolsOpen(false);
       }
       if (e.target !== document.body) return;
+      if (e.key.toLowerCase() === 'r' && selectedBlock) {
+        e.preventDefault();
+        rotateRef.current(selectedBlock, e.shiftKey ? 'x' : 'y', 1);
+        return;
+      }
       const moves: Record<string, ['x' | 'y' | 'z', number]> = {
         ArrowLeft: ['x', -1],
         ArrowRight: ['x', 1],
@@ -462,7 +613,10 @@ export default function Game() {
           </span>
         </div>
       </header>
-      <section className={`playground ${live ? 'is-live' : ''}`} aria-label="建築ワールド">
+      <section
+        className={`playground ${live ? 'is-live' : ''}`}
+        aria-label="建築ワールド"
+      >
         <div ref={host} className="world-canvas" />
         {!ready && !error && (
           <div className="loading">
@@ -564,7 +718,7 @@ export default function Game() {
             variant="ghost"
             className="icon-button"
             onClick={photo}
-            disabled={!ready}
+            disabled={!ready || !loaded}
             aria-label="島の写真を保存"
           >
             <Camera />
@@ -646,7 +800,7 @@ export default function Game() {
             <Button
               className="live-button"
               onClick={startLive}
-              disabled={!ready}
+              disabled={!ready || !loaded}
             >
               <Radio size={18} />
               ライブをひらく
@@ -655,14 +809,27 @@ export default function Game() {
           </div>
         )}
         {live && (
-          <div className={`live-panel glass-panel ${chatVisible ? '' : 'chat-hidden'}`}>
+          <div
+            className={`live-panel glass-panel ${chatVisible ? '' : 'chat-hidden'}`}
+          >
             <div>
               <span className="live-badge">
                 <span /> LIVE
               </span>
               <strong>{Math.max(0, 30 - seconds)}s</strong>
-              <span className="live-visitors"><Users size={14} />{score.visitors}人</span>
-              <Button variant="ghost" className="chat-toggle" onClick={() => setChatVisible((v) => !v)} aria-expanded={chatVisible} aria-controls="live-comment">{chatVisible ? '隠す' : 'コメント'}</Button>
+              <span className="live-visitors">
+                <Users size={14} />
+                {score.visitors}人
+              </span>
+              <Button
+                variant="ghost"
+                className="chat-toggle"
+                onClick={() => setChatVisible((v) => !v)}
+                aria-expanded={chatVisible}
+                aria-controls="live-comment"
+              >
+                {chatVisible ? '隠す' : 'コメント'}
+              </Button>
               <Button
                 variant="ghost"
                 className="icon-button"
@@ -672,11 +839,18 @@ export default function Game() {
                 <X />
               </Button>
             </div>
-            {chatVisible && comment && <output id="live-comment" className="chat-line" aria-live="polite" aria-atomic="true">
-              <span>{comment.name}</span>
-              <span className="chat-message">{comment.text}</span>
-              <Heart size={14} />
-            </output>}
+            {chatVisible && comment && (
+              <output
+                id="live-comment"
+                className="chat-line"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <span>{comment.name}</span>
+                <span className="chat-message">{comment.text}</span>
+                <Heart size={14} />
+              </output>
+            )}
             <small>住民とのシミュレーション</small>
           </div>
         )}
@@ -697,6 +871,9 @@ export default function Game() {
               onClick={() => {
                 setTab('blocks');
                 setErase(false);
+                setRangeMode(false);
+                setRangeStart(undefined);
+                setRangeEnd(undefined);
               }}
             >
               <Box size={17} />
@@ -708,6 +885,9 @@ export default function Game() {
               onClick={() => {
                 setTab('blueprints');
                 setErase(false);
+                setRangeMode(false);
+                setRangeStart(undefined);
+                setRangeEnd(undefined);
               }}
             >
               <Layers3 size={17} />
@@ -715,10 +895,15 @@ export default function Game() {
             </Button>
           </div>
           <div className="dock-top-right">
-            <Button variant="ghost" className="tools-toggle"
-              aria-expanded={toolsOpen} aria-controls="build-options build-position"
-              onClick={() => setToolsOpen((v) => !v)}>
-              <Settings2 size={16} />{toolsOpen ? '閉じる' : '調整'}
+            <Button
+              variant="ghost"
+              className="tools-toggle"
+              aria-expanded={toolsOpen}
+              aria-controls="build-options build-position"
+              onClick={() => setToolsOpen((v) => !v)}
+            >
+              <Settings2 size={16} />
+              {toolsOpen ? '閉じる' : '調整'}
             </Button>
             <span className="free-label">素材はぜんぶ、使い放題。</span>
             <Button
@@ -741,36 +926,98 @@ export default function Game() {
             </Button>
           </div>
         </div>
+        {toolsOpen && (
+          <div className="part-actions">
+            <Button
+              variant="outline"
+              aria-pressed={rangeMode}
+              onClick={() => {
+                setRangeMode((v) => !v);
+                setErase(false);
+                setRangeStart(undefined);
+                setRangeEnd(undefined);
+              }}
+            >
+              範囲消し
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setRotation((r) => (r + 1) % 4)}
+            >
+              配置の向き {rotation * 90}°
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!selectedBlock}
+              onClick={() =>
+                selectedBlock && rotateRef.current(selectedBlock, 'y', 1)
+              }
+            >
+              選択を↻
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!selectedBlock}
+              onClick={() =>
+                selectedBlock && rotateRef.current(selectedBlock, 'x', 1)
+              }
+            >
+              選択を上下↻
+            </Button>
+            {selectedBlock && shapeOf(selectedBlock) === 'door' && (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  commit({
+                    ...world,
+                    blocks: world.blocks.map((b) =>
+                      b === selectedBlock ? { ...b, open: !b.open } : b,
+                    ),
+                  })
+                }
+              >
+                {selectedBlock.open ? 'ドアを閉める' : 'ドアを開く'}
+              </Button>
+            )}
+          </div>
+        )}
+        {focusHint && toolsOpen && (
+          <div className="focus-help">
+            <span>
+              🎯 選んだ場所を中央に表示
+              <br />
+              建築する場所が画面の端に行ってしまったときに使います。照準ボタンで、今選んでいる場所が画面中央に移動します。
+            </span>
+            <button
+              aria-label="中央表示の説明を閉じる"
+              onClick={() => {
+                setFocusHint(false);
+                try {
+                  localStorage.setItem('iriamcraft-focus-help', 'seen');
+                } catch {
+                  /* Optional hint preference. */
+                }
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
         <div className="dock-main">
           <div className="palette-wrap">
             {tab === 'blocks' ? (
-              <div className="material-palette">
-                {MATERIALS.map((m, i) => (
-                  <Button
-                    variant="ghost"
-                    key={m.id}
-                    className={`material ${material === m.id && !erase ? 'selected' : ''}`}
-                    aria-label={`${m.name}を選ぶ`}
-                    aria-pressed={material === m.id && !erase}
-                    onClick={() => {
-                      setMaterial(m.id);
-                      setErase(false);
-                    }}
-                  >
-                    <span className="key-number">{i + 1}</span>
-                    <span
-                      className="voxel-icon"
-                      style={{ '--block-color': m.color } as CSSProperties}
-                    >
-                      <Box size={31} strokeWidth={1.3} />
-                    </span>
-                    <span>{m.name}</span>
-                    {material === m.id && !erase && (
-                      <Check size={11} className="material-check" />
-                    )}
-                  </Button>
-                ))}
-              </div>
+              <MaterialPicker
+                material={material}
+                shape={shape}
+                onChange={(m, s) => {
+                  setMaterial(m);
+                  setShape(s);
+                  setErase(false);
+                  setRangeMode(false);
+                  setRangeStart(undefined);
+                  setRangeEnd(undefined);
+                }}
+              />
             ) : (
               <div className="blueprint-palette">
                 {BLUEPRINTS.map((b) => (
@@ -821,7 +1068,12 @@ export default function Game() {
               <Button
                 variant="ghost"
                 className={`erase-button ${erase ? 'active' : ''}`}
-                onClick={() => setErase((v) => !v)}
+                onClick={() => {
+                  setErase((v) => !v);
+                  setRangeMode(false);
+                  setRangeStart(undefined);
+                  setRangeEnd(undefined);
+                }}
                 aria-label="取り外しモード"
                 aria-pressed={erase}
               >
@@ -830,16 +1082,22 @@ export default function Game() {
             </div>
             <Button
               className={`place-button ${erase ? 'erasing' : ''}`}
-              disabled={!ready || live}
+              disabled={!ready || !loaded || live}
               onClick={build}
             >
               {erase ? <Eraser size={19} /> : <Plus size={21} />}
               <span>
-                {erase
-                  ? '取り外す'
-                  : tab === 'blueprints'
-                    ? 'まとめて建てる'
-                    : 'ここに置く'}
+                {rangeMode
+                  ? rangeEnd
+                    ? `この範囲を消す（${rangeBlocks.length}）`
+                    : rangeStart
+                      ? 'ここから → 2点目を選択'
+                      : '1点目を選択'
+                  : erase
+                    ? '取り外す'
+                    : tab === 'blueprints'
+                      ? 'まとめて建てる'
+                      : 'ここに置く'}
               </span>
               <kbd>↵</kbd>
             </Button>
@@ -879,7 +1137,13 @@ export default function Game() {
               <ArrowDown size={14} />
             </button>
             <span className="height-label">高さ {selection.y}</span>
-            <button onClick={() => engine.current?.focus(erase ? hit : selection)} aria-label="選択位置を画面中央へ"><Crosshair size={14} /></button>
+            <button
+              onClick={() => engine.current?.focus(erase ? hit : selection)}
+              aria-label="選択中の建築位置を画面中央へ移動"
+              title="選んだ場所を中央に表示"
+            >
+              <Crosshair size={14} />
+            </button>
             <button onClick={() => nudge('y', -1)} aria-label="配置を一段下へ">
               <Minus size={14} />
             </button>
@@ -938,6 +1202,14 @@ export default function Game() {
                 </p>
               </div>
               <div className="help-note">
+                🎯 選んだ場所を中央に表示
+                <br />
+                建築する場所が画面の端に行ってしまったときに使います。調整の照準ボタンをタップすると、今選んでいる場所が画面中央に移動します。
+                <br />
+                選択済みブロック上を左右スワイプで水平90°回転、上下で縦回転。空いた場所からドラッグでカメラ回転。PCはR、Shift+R。
+                <br />
+                範囲消しは2点を選び、赤い範囲と件数を確認して確定。戻すでまとめて復元できます。水は島の底より下へ落ちると空へ流れ出ます。
+                <br />
                 ドラッグ：回転 / 2本指：移動・拡大
                 <br />
                 PC：矢印キーで位置調整、PageUp / Downで高さ、Enterで配置、Ctrl /
@@ -961,15 +1233,23 @@ export default function Game() {
                   }}
                 />
               </label>
-              <Button variant="outline" className="setting-row" disabled={live}
+              <Button
+                variant="outline"
+                className="setting-row"
+                disabled={live}
                 onClick={() => {
                   const next = expandGround(world);
-                  if (next.error) { notify(next.error); return; }
+                  if (next.error) {
+                    notify(next.error);
+                    return;
+                  }
                   commit(next.world);
                   setModal(null);
                   notify('床を広げました。「戻す」で元に戻せます');
-                }}>
-                <Grid2X2 />保存した島の床を広げる
+                }}
+              >
+                <Grid2X2 />
+                保存した島の床を広げる
               </Button>
               <Button
                 variant="outline"
@@ -1004,9 +1284,12 @@ export default function Game() {
                   const f = e.target.files?.[0];
                   if (!f) return;
                   try {
-                    if (f.size > 1_500_000) throw Error();
                     const next = parseWorld(await f.text());
                     commit(next);
+                    setRangeMode(false);
+                    setRangeStart(undefined);
+                    setRangeEnd(undefined);
+                    setErase(false);
                     notify('島を読み込みました。「戻す」で前の島に戻せます');
                     setModal(null);
                   } catch {
@@ -1056,4 +1339,3 @@ export default function Game() {
     </main>
   );
 }
-

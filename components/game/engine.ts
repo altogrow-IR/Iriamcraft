@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
+  key,
   MATERIALS,
-  LIMIT,
   onIsland,
   inBounds,
   ISLAND_RADIUS_X,
@@ -14,14 +14,69 @@ import {
   type Point,
 } from '@/lib/world';
 
+import { ChunkRenderer } from './chunkRenderer';
+import {
+  geometryFor,
+  blockMatrix,
+  disposeBlockGeometries,
+} from './blockGeometries';
+import { shapeOf } from '@/lib/block-types';
+import { NEIGHBORS, type WaterCell } from '@/lib/water';
+
 export class IslandEngine {
   private scene = new THREE.Scene();
   private renderer: THREE.WebGLRenderer;
-  private camera = new THREE.OrthographicCamera(-20, 20, 15, -15, 0.1, HORIZONTAL_LIMIT * 4);
+  private camera = new THREE.OrthographicCamera(
+    -20,
+    20,
+    15,
+    -15,
+    0.1,
+    HORIZONTAL_LIMIT * 4,
+  );
   private controls: OrbitControls;
-  private voxels: THREE.InstancedMesh;
+  private chunks = new ChunkRenderer();
+  private selected?: Block;
+  onRotationPreview?: () => void;
+  private rotationPreview = false;
+  onRotate?: (point: Point, axis: 'x' | 'y', direction: number) => void;
+  private rotating?: { block: Block; pointer: number };
+  private ground = new Set<string>();
+  private lamps: Block[] = [];
+  private lights: THREE.PointLight[] = [];
+  private lightTime = 0;
+  private waterWorker = new Worker(
+    new URL('../../lib/water.worker.ts', import.meta.url),
+    { type: 'module' },
+  );
+  private waterRevision = 0;
+  private waterPending = false;
+  private waterInfluence = new Set<string>();
+  private waterColumns = new Set<string>();
+  private waterMeshes: THREE.InstancedMesh[] = [];
+  private waterGeometry = new THREE.BoxGeometry(0.98, 1, 0.98);
+  private waterMaterial = new THREE.MeshStandardMaterial({
+    color: '#75cfe9',
+    transparent: true,
+    opacity: 0.62,
+    roughness: 0.25,
+    depthWrite: false,
+  });
+  private ghostGroup = new THREE.Group();
+  private rangeMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({
+      color: '#ef5574',
+      transparent: true,
+      opacity: 0.23,
+      depthWrite: false,
+    }),
+  );
+  private selectionMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1.04, 1.04, 1.04),
+    new THREE.MeshBasicMaterial({ color: '#ffcc72', wireframe: true }),
+  );
   private foundation?: THREE.InstancedMesh;
-  private ghost: THREE.InstancedMesh;
   private blocks: Block[] = [];
   private resizeObserver: ResizeObserver;
   private ray = new THREE.Raycaster();
@@ -72,7 +127,11 @@ export class IslandEngine {
     this.controls.maxPolarAngle = Math.PI - 0.25;
     this.controls.minZoom = 0.55;
     this.controls.maxZoom = 3;
-    this.controls.maxTargetRadius = Math.hypot(HORIZONTAL_LIMIT, HORIZONTAL_LIMIT, VERTICAL_LIMIT);
+    this.controls.maxTargetRadius = Math.hypot(
+      HORIZONTAL_LIMIT,
+      HORIZONTAL_LIMIT,
+      VERTICAL_LIMIT,
+    );
     this.controls.touches.ONE = THREE.TOUCH.ROTATE;
     this.controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
     this.ambient = new THREE.HemisphereLight(0xe8faff, 0x8e7cb1, 2.3);
@@ -92,30 +151,68 @@ export class IslandEngine {
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.06;
     this.scene.add(this.sun);
-    const geometry = new THREE.BoxGeometry(0.98, 0.98, 0.98);
-    this.voxels = new THREE.InstancedMesh(
-      geometry,
-      new THREE.MeshStandardMaterial({ roughness: 0.88 }),
-      LIMIT,
+    this.scene.add(
+      this.chunks.group,
+      this.ghostGroup,
+      this.rangeMesh,
+      this.selectionMesh,
     );
-    this.voxels.count = 0;
-    this.voxels.castShadow = true;
-    this.voxels.receiveShadow = true;
-    this.voxels.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.scene.add(this.voxels);
-    this.ghost = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1.01, 1.01, 1.01),
-      new THREE.MeshBasicMaterial({
-        color: 0x12b9b3,
-        transparent: true,
-        opacity: 0.44,
-        depthWrite: false,
-      }),
-      200,
-    );
-    this.ghost.count = 0;
-    this.ghost.renderOrder = 2;
-    this.scene.add(this.ghost);
+    this.rangeMesh.visible = false;
+    this.selectionMesh.visible = false;
+    for (
+      let i = 0;
+      i < (matchMedia('(max-width: 700px)').matches ? 8 : 12);
+      i++
+    ) {
+      const light = new THREE.PointLight('#ffcf85', 0, 8, 2);
+      this.lights.push(light);
+      this.scene.add(light);
+    }
+    this.waterWorker.onmessage = (
+      event: MessageEvent<{ revision: number; cells: WaterCell[] }>,
+    ) => {
+      if (event.data.revision !== this.waterRevision) return;
+      this.waterPending = false;
+      this.waterMeshes.forEach((m) => {
+        this.scene.remove(m);
+        m.dispose();
+      });
+      this.waterMeshes = [];
+      this.waterInfluence.clear();
+      this.waterColumns.clear();
+      const groups = new Map<string, WaterCell[]>();
+      for (const c of event.data.cells) {
+        this.waterInfluence.add(key(c));
+        this.waterColumns.add(`${c.x},${c.z}`);
+        for (const [x, y, z] of NEIGHBORS)
+          this.waterInfluence.add(key({ x: c.x + x, y: c.y + y, z: c.z + z }));
+        if (
+          shapeOf(
+            this.chunks.blocks.get(key(c)) ?? { ...c, material: 'water' },
+          ) === 'waterSource'
+        )
+          continue;
+        const ck = `${Math.floor(c.x / 16)},${Math.floor(c.y / 16)},${Math.floor(c.z / 16)}`;
+        if (!groups.has(ck)) groups.set(ck, []);
+        groups.get(ck)!.push(c);
+      }
+      for (const cs of groups.values()) {
+        const mesh = new THREE.InstancedMesh(
+            this.waterGeometry,
+            this.waterMaterial,
+            cs.length,
+          ),
+          matrix = new THREE.Matrix4();
+        cs.forEach((c, i) => {
+          const h = c.falling ? 0.96 : c.level / 8;
+          matrix.makeScale(1, h, 1).setPosition(c.x, c.y - 0.5 + h / 2, c.z);
+          mesh.setMatrixAt(i, matrix);
+        });
+        mesh.computeBoundingSphere();
+        this.scene.add(mesh);
+        this.waterMeshes.push(mesh);
+      }
+    };
     this.addFoundation();
     this.addWorldDetails();
     const particleGeometry = new THREE.BufferGeometry();
@@ -158,38 +255,84 @@ export class IslandEngine {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
+    let firstPointer: PointerEvent | undefined,
+      replaying = false;
     const down = (e: PointerEvent) => {
+      if (replaying) return;
       this.pointers.add(e.pointerId);
-      if (this.pointers.size > 1) this.gesture = true;
-      else {
-        this.gesture = false;
-        this.down = { x: e.clientX, y: e.clientY };
+      if (this.pointers.size > 1) {
+        this.gesture = true;
+        const wasRotating = !!this.rotating;
+        this.rotating = undefined;
+        this.controls.enabled = true;
+        if (wasRotating && firstPointer) {
+          replaying = true;
+          this.renderer.domElement.dispatchEvent(
+            new PointerEvent('pointerdown', {
+              pointerId: firstPointer.pointerId,
+              pointerType: firstPointer.pointerType,
+              clientX: firstPointer.clientX,
+              clientY: firstPointer.clientY,
+              button: 0,
+              buttons: 1,
+              bubbles: true,
+            }),
+          );
+          replaying = false;
+        }
+        return;
+      }
+      firstPointer = e;
+      this.rotationPreview = false;
+      this.gesture = false;
+      this.down = { x: e.clientX, y: e.clientY };
+      const hit = this.pick(e);
+      if (
+        e.button === 0 &&
+        this.selected &&
+        hit &&
+        key(hit.block) === key(this.selected) &&
+        !this.live
+      ) {
+        this.rotating = { block: hit.block, pointer: e.pointerId };
+        this.controls.enabled = false;
+        this.renderer.domElement.setPointerCapture(e.pointerId);
+      }
+    };
+    const move = (e: PointerEvent) => {
+      if (
+        this.rotating &&
+        !this.rotationPreview &&
+        Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 28
+      ) {
+        this.rotationPreview = true;
+        this.onRotationPreview?.();
       }
     };
     const up = (e: PointerEvent) => {
       this.pointers.delete(e.pointerId);
+      const dx = e.clientX - this.down.x,
+        dy = e.clientY - this.down.y,
+        rotating = this.rotating;
+      this.rotating = undefined;
+      this.controls.enabled = true;
+      if (this.gesture) return;
       if (
-        this.gesture ||
-        Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 8
-      )
+        rotating &&
+        rotating.pointer === e.pointerId &&
+        Math.hypot(dx, dy) > 28
+      ) {
+        this.onRotate?.(
+          rotating.block,
+          Math.abs(dx) > Math.abs(dy) ? 'y' : 'x',
+          (Math.abs(dx) > Math.abs(dy) ? dx : dy) > 0 ? 1 : -1,
+        );
         return;
-      const r = this.renderer.domElement.getBoundingClientRect();
-      this.ray.setFromCamera(
-        new THREE.Vector2(
-          ((e.clientX - r.left) / r.width) * 2 - 1,
-          (-(e.clientY - r.top) / r.height) * 2 + 1,
-        ),
-        this.camera,
-      );
-      const hit = this.ray.intersectObject(this.voxels)[0];
-      if (hit && hit.instanceId !== undefined && hit.face) {
-        const p = this.blocks[hit.instanceId];
-        const n = hit.face.normal;
-        this.select(p, {
-          x: Math.round(n.x),
-          y: Math.round(n.y),
-          z: Math.round(n.z),
-        });
+      }
+      if (Math.hypot(dx, dy) > 8) return;
+      const hit = this.pick(e);
+      if (hit) {
+        this.select(hit.point, hit.face);
       } else {
         const p = this.ray.ray.intersectPlane(
           new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.5),
@@ -205,20 +348,28 @@ export class IslandEngine {
     const cancel = (e: PointerEvent) => {
       this.pointers.delete(e.pointerId);
       this.gesture = true;
+      this.rotating = undefined;
+      this.controls.enabled = true;
     };
-    this.renderer.domElement.addEventListener('pointerdown', down);
-    this.renderer.domElement.addEventListener('pointerup', up);
-    this.renderer.domElement.addEventListener('pointercancel', cancel);
-    const lost = () => {
-      this.pointers.clear();
-      this.gesture = true;
-    };
-    this.renderer.domElement.addEventListener('lostpointercapture', lost);
+    // Capture phase runs before OrbitControls handles the same pointerdown.
+    this.renderer.domElement.addEventListener('pointerdown', down, true);
+    this.renderer.domElement.addEventListener('pointerup', up, true);
+    this.renderer.domElement.addEventListener('pointermove', move, true);
+    this.renderer.domElement.addEventListener('pointercancel', cancel, true);
+    this.renderer.domElement.addEventListener('lostpointercapture', cancel);
     this.cleanup.push(() => {
-      this.renderer.domElement.removeEventListener('pointerdown', down);
-      this.renderer.domElement.removeEventListener('pointerup', up);
-      this.renderer.domElement.removeEventListener('pointercancel', cancel);
-      this.renderer.domElement.removeEventListener('lostpointercapture', lost);
+      this.renderer.domElement.removeEventListener('pointerdown', down, true);
+      this.renderer.domElement.removeEventListener('pointerup', up, true);
+      this.renderer.domElement.removeEventListener('pointermove', move, true);
+      this.renderer.domElement.removeEventListener(
+        'pointercancel',
+        cancel,
+        true,
+      );
+      this.renderer.domElement.removeEventListener(
+        'lostpointercapture',
+        cancel,
+      );
     });
     const contextLost = (e: Event) => {
       e.preventDefault();
@@ -338,38 +489,99 @@ export class IslandEngine {
       this.visitors.push(visitor);
     }
   }
+  private pick(e: PointerEvent) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    this.ray.setFromCamera(
+      new THREE.Vector2(
+        ((e.clientX - r.left) / r.width) * 2 - 1,
+        -((e.clientY - r.top) / r.height) * 2 + 1,
+      ),
+      this.camera,
+    );
+    return this.chunks.pick(this.ray);
+  }
+  setSelected(b?: Block) {
+    this.selected = b;
+    this.selectionMesh.visible = !!b && !this.live;
+    if (b) {
+      this.selectionMesh.position.set(
+        b.x,
+        b.y + (shapeOf(b) === 'door' ? 0.5 : 0),
+        b.z,
+      );
+      this.selectionMesh.scale.set(1, shapeOf(b) === 'door' ? 2 : 1, 1);
+    }
+  }
+  setRange(a?: Point, b?: Point) {
+    this.rangeMesh.visible = !!a && !!b;
+    if (a && b) {
+      this.rangeMesh.position.set(
+        (a.x + b.x) / 2,
+        (a.y + b.y) / 2,
+        (a.z + b.z) / 2,
+      );
+      this.rangeMesh.scale.set(
+        Math.abs(a.x - b.x) + 1.04,
+        Math.abs(a.y - b.y) + 1.04,
+        Math.abs(a.z - b.z) + 1.04,
+      );
+    }
+  }
   setBlocks(blocks: Block[]) {
+    if (blocks === this.blocks) return;
+    const old = this.chunks.blocks,
+      next = new Map(blocks.map((b) => [key(b), b]));
+    let waterChanged = this.waterRevision === 0;
+    const affects = (b: Block) =>
+      shapeOf(b) === 'waterSource' ||
+      this.waterInfluence.has(key(b)) ||
+      this.waterColumns.has(`${b.x},${b.z}`);
+    for (const [k, b] of old)
+      if (next.get(k) !== b && affects(b)) waterChanged = true;
+    for (const [k, b] of next)
+      if (old.get(k) !== b && affects(b)) waterChanged = true;
+    // While a simulation is pending, conservatively replace it with the newest world.
+    if (this.waterPending && blocks.some((b) => shapeOf(b) === 'waterSource'))
+      waterChanged = true;
     this.blocks = blocks;
-    this.voxels.count = blocks.length;
-    const matrix = new THREE.Matrix4(),
-      color = new THREE.Color();
-    blocks.forEach((b, i) => {
-      matrix.makeTranslation(b.x, b.y, b.z);
-      this.voxels.setMatrixAt(i, matrix);
-      color.set(MATERIALS.find((m) => m.id === b.material)!.color);
-      color.multiplyScalar(1 + Math.sin(b.x * 23 + b.z * 13 + b.y * 7) * 0.035);
-      this.voxels.setColorAt(i, color);
-    });
-    this.voxels.instanceMatrix.needsUpdate = true;
-    if (this.voxels.instanceColor) this.voxels.instanceColor.needsUpdate = true;
-    this.voxels.computeBoundingSphere();
+    this.chunks.setBlocks(blocks);
+    this.ground = new Set(
+      blocks.filter((b) => b.y === 0).map((b) => `${b.x},${b.z}`),
+    );
+    this.lamps = blocks.filter((b) => shapeOf(b) === 'lamp');
+    this.lightTime = 0;
+    if (waterChanged) {
+      this.waterPending = true;
+      this.waterRevision++;
+      this.waterWorker.postMessage({ revision: this.waterRevision, blocks });
+    }
   }
   setGhost(blocks: Point[], valid = true, erase = false) {
-    // The original island underside is part of the scene, not a placement
-    // preview. Keep it visible while adding underground blocks so a new
-    // construction cannot make the island appear to lose its bottom layer.
     if (this.foundation) this.foundation.visible = true;
-    this.ghost.count = Math.min(blocks.length, 200);
-    const matrix = new THREE.Matrix4();
-    blocks.slice(0, 200).forEach((p, i) => {
-      matrix.makeTranslation(p.x, p.y, p.z);
-      this.ghost.setMatrixAt(i, matrix);
-    });
-    (this.ghost.material as THREE.MeshBasicMaterial).color.set(
-      erase || !valid ? '#ff6c8b' : '#0ec2b3',
-    );
-    this.ghost.instanceMatrix.needsUpdate = true;
-    this.ghost.computeBoundingSphere();
+    for (const obj of this.ghostGroup.children) {
+      if (obj instanceof THREE.Mesh) (obj.material as THREE.Material).dispose();
+    }
+    this.ghostGroup.clear();
+    for (const p of blocks) {
+      const b = { material: 'white' as const, ...p } as Block;
+      const mesh = new THREE.Mesh(
+        geometryFor(b),
+        new THREE.MeshBasicMaterial({
+          color:
+            erase || !valid
+              ? new THREE.Color('#ff6c8b')
+              : new THREE.Color(
+                  MATERIALS.find((m) => m.id === b.material)!.color,
+                ).lerp(new THREE.Color('#0ec2b3'), 0.3),
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+        }),
+      );
+      mesh.applyMatrix4(blockMatrix(b));
+      mesh.renderOrder = 2;
+      this.ghostGroup.add(mesh);
+    }
   }
   setLive(live: boolean, count = 8) {
     this.live = live;
@@ -377,8 +589,8 @@ export class IslandEngine {
   }
   setNight(night: boolean) {
     this.night = night;
-    this.ambient.intensity = night ? 1.4 : 2.3;
-    this.sun.intensity = night ? 1 : 3.2;
+    this.ambient.intensity = night ? 0.4 : 2.3;
+    this.sun.intensity = night ? 0.35 : 3.2;
     this.sun.color.set(night ? '#babaff' : '#fff3e4');
   }
   rotate(direction = 1) {
@@ -444,6 +656,25 @@ export class IslandEngine {
     if (document.hidden) return;
     const t = performance.now() / 1000;
     this.controls.update();
+    if (t - this.lightTime > 0.3) {
+      this.lightTime = t;
+      const nearest = this.lamps
+        .map((b) => ({
+          b,
+          d: this.camera.position.distanceToSquared(
+            new THREE.Vector3(b.x, b.y, b.z),
+          ),
+        }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, this.lights.length);
+      this.lights.forEach((l, i) => {
+        const b = nearest[i]?.b;
+        l.intensity = b ? (this.night ? 16 : 7) : 0;
+        if (b) l.position.set(b.x, b.y + 0.6, b.z);
+      });
+    }
+    if (!this.reduced)
+      this.waterMaterial.opacity = 0.62 + Math.sin(t * 1.7) * 0.035;
     if (!this.reduced) {
       this.sparks.rotation.y = t * 0.025;
       const age = t - this.burstTime;
@@ -467,9 +698,7 @@ export class IslandEngine {
         const z = this.live
           ? 0.2 + Math.floor(i / 6) * 0.65
           : 2.5 + Math.cos(t * 0.16 + i) * 0.65;
-        const ground = this.blocks.some(
-          (b) => b.x === Math.round(x) && b.z === Math.round(z) && b.y === 0,
-        );
+        const ground = this.ground.has(`${Math.round(x)},${Math.round(z)}`);
         v.visible = ground;
         v.position.set(
           x,
@@ -493,6 +722,12 @@ export class IslandEngine {
     cancelAnimationFrame(this.frame);
     this.resizeObserver.disconnect();
     this.controls.dispose();
+    this.waterWorker.terminate();
+    this.chunks.dispose();
+    this.waterMeshes.forEach((m) => m.dispose());
+    this.waterGeometry.dispose();
+    this.waterMaterial.dispose();
+    disposeBlockGeometries();
     this.cleanup.forEach((fn) => fn());
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
