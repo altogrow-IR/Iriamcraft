@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   key,
-  MATERIALS,
   onIsland,
   inBounds,
   ISLAND_RADIUS_X,
@@ -31,10 +30,17 @@ export class IslandEngine {
     20,
     15,
     -15,
-    0.1,
+    0.01,
     HORIZONTAL_LIMIT * 4,
   );
   private controls: OrbitControls;
+  onInteriorChange?: (active: boolean) => void;
+  private interior = false;
+  private zoomIntent = 0;
+  private handlingZoom = false;
+  private readonly normalMaxZoom = 10;
+  private interiorPosition = new THREE.Vector3();
+  private interiorTarget = new THREE.Vector3();
   private chunks = new ChunkRenderer();
   private selected?: Block;
   onRotationPreview?: () => void;
@@ -126,7 +132,44 @@ export class IslandEngine {
     this.controls.minPolarAngle = 0.25;
     this.controls.maxPolarAngle = Math.PI - 0.25;
     this.controls.minZoom = 0.55;
-    this.controls.maxZoom = 3;
+    this.controls.maxZoom = 20;
+    const change = () => {
+      if (this.handlingZoom) return;
+      this.handlingZoom = true;
+      if (this.interior) {
+        // OrbitControls supplies rotation and pan. Keep rotation centred on the
+        // eye while preserving its target translation from two-finger/right drag.
+        const forward = this.camera.getWorldDirection(new THREE.Vector3());
+        const pan = this.controls.target.clone().sub(this.interiorTarget);
+        this.camera.position.copy(this.interiorPosition).add(pan);
+        this.controls.target
+          .copy(this.camera.position)
+          .addScaledVector(forward, 0.1);
+        const travel = Math.log(this.camera.zoom / this.normalMaxZoom) * 24;
+        this.camera.position.addScaledVector(forward, travel);
+        this.controls.target.addScaledVector(forward, travel);
+        this.camera.zoom = this.normalMaxZoom;
+      } else if (this.camera.zoom > this.normalMaxZoom) {
+        this.zoomIntent += Math.log(this.camera.zoom / this.normalMaxZoom);
+        this.camera.zoom = this.normalMaxZoom;
+        if (this.zoomIntent >= 0.12) {
+          this.interior = true;
+          const forward = this.camera.getWorldDirection(new THREE.Vector3());
+          this.controls.target
+            .copy(this.camera.position)
+            .addScaledVector(forward, 0.1);
+          this.onInteriorChange?.(true);
+        }
+      } else if (this.camera.zoom < this.normalMaxZoom) this.zoomIntent = 0;
+      this.interiorPosition.copy(this.camera.position);
+      this.interiorTarget.copy(this.controls.target);
+      this.camera.updateProjectionMatrix();
+      this.handlingZoom = false;
+    };
+    this.controls.addEventListener('change', change);
+    this.cleanup.push(() =>
+      this.controls.removeEventListener('change', change),
+    );
     this.controls.maxTargetRadius = Math.hypot(
       HORIZONTAL_LIMIT,
       HORIZONTAL_LIMIT,
@@ -559,30 +602,38 @@ export class IslandEngine {
   setGhost(blocks: Point[], valid = true, erase = false) {
     if (this.foundation) this.foundation.visible = true;
     for (const obj of this.ghostGroup.children) {
-      if (obj instanceof THREE.Mesh) (obj.material as THREE.Material).dispose();
+      if (obj instanceof THREE.InstancedMesh) {
+        obj.dispose();
+        (obj.material as THREE.Material).dispose();
+      }
     }
     this.ghostGroup.clear();
+    const groups = new Map<string, Block[]>();
     for (const p of blocks) {
-      const b = { material: 'white' as const, ...p } as Block;
-      const mesh = new THREE.Mesh(
-        geometryFor(b),
+      const block = { material: 'white' as const, ...p } as Block;
+      const id = shapeOf(block) + ':' + !!block.open;
+      if (!groups.has(id)) groups.set(id, []);
+      groups.get(id)!.push(block);
+    }
+    for (const bs of groups.values()) {
+      const mesh = new THREE.InstancedMesh(
+        geometryFor(bs[0]),
         new THREE.MeshBasicMaterial({
-          color:
-            erase || !valid
-              ? new THREE.Color('#ff6c8b')
-              : new THREE.Color(
-                  MATERIALS.find((m) => m.id === b.material)!.color,
-                ).lerp(new THREE.Color('#0ec2b3'), 0.3),
+          color: erase || !valid ? '#ff4965' : '#0ec2b3',
           transparent: true,
           opacity: 0.45,
           depthWrite: false,
         }),
+        bs.length,
       );
-      mesh.applyMatrix4(blockMatrix(b));
+      bs.forEach((block, i) => mesh.setMatrixAt(i, blockMatrix(block)));
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
       mesh.renderOrder = 2;
       this.ghostGroup.add(mesh);
     }
   }
+
   setLive(live: boolean, count = 8) {
     this.live = live;
     this.visitors.forEach((v, i) => (v.visible = i < (live ? count : 4)));
@@ -603,10 +654,16 @@ export class IslandEngine {
     this.controls.update();
   }
   zoom(delta: number) {
-    this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom + delta, 0.55, 3);
+    this.camera.zoom = THREE.MathUtils.clamp(
+      this.camera.zoom * Math.exp(delta),
+      0.55,
+      20,
+    );
     this.camera.updateProjectionMatrix();
+    this.controls.dispatchEvent({ type: 'change' });
   }
   focus(p: Point) {
+    if (this.interior) this.home();
     const offset = this.camera.position.clone().sub(this.controls.target);
     if (p.y < 0) offset.y = -Math.abs(offset.y);
     this.controls.target.set(p.x, p.y, p.z);
@@ -614,6 +671,9 @@ export class IslandEngine {
     this.controls.update();
   }
   home() {
+    this.interior = false;
+    this.zoomIntent = 0;
+    this.onInteriorChange?.(false);
     this.controls.target.set(0, 1.3, 0);
     this.camera.position.set(24, 24, 30);
     this.camera.zoom = 1;
@@ -621,6 +681,7 @@ export class IslandEngine {
     this.controls.update();
   }
   top() {
+    if (this.interior) this.home();
     this.controls.target.set(0, 0, 0);
     this.camera.position.set(0.01, 40, 0.01);
     this.controls.update();

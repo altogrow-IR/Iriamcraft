@@ -2277,3 +2277,26 @@ button svg {
 .focus-help { display:flex; background:#fff6dd; border-radius:10px; padding:9px; font-size:12px; line-height:1.6; }
 .focus-help button { min-width:44px; min-height:44px; }
 @media(max-width:700px){ .picker-launch{height:52px;padding:6px 12px;} .material-grid{grid-template-columns:repeat(3,minmax(0,1fr));} .material-dialog{padding:18px;gap:10px;} .part-actions button{font-size:12px;} }
+
+/* Custom blueprints keep the canvas available on portrait screens. */
+.blueprint-sections { min-width: 0; max-height: 220px; overflow-y: auto; width: 100%; }
+.blueprint-sections .blueprint-palette { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); overflow-x: hidden; }
+.blueprint-sections .blueprint-card { min-width: 0; width: 100%; }
+.my-blueprints { padding-top: 12px; }
+.my-blueprints p { font-size: 13px; line-height: 1.6; }
+.my-plan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #d7e6e5; }
+.my-plan > div { flex: 1; min-width: 130px; overflow-wrap: anywhere; }
+.my-plan small { display: block; font-size: 11px; }
+.my-plan.selected { background: #e1f5ef; }
+.my-plan summary { min-height: 44px; padding: 12px; cursor: pointer; }
+.my-plan details[open] { width: 100%; }
+.range-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0; align-items: center; }
+.range-actions > span { font-size: 12px; }
+.range-actions button, .my-plan button, .blueprint-form button { min-height: 44px; }
+.blueprint-form { display: grid; gap: 16px; }
+.blueprint-form input:not([type=checkbox]) { display: block; width: 100%; border: 1px solid #bbcfcf; border-radius: 8px; padding: 12px; font-size: 16px; }
+.blueprint-form .terrain-option { display: flex; gap: 12px; align-items: center; min-height: 44px; }
+.blueprint-form input[type=checkbox] { width: 22px; height: 22px; }
+.blueprint-form > div { display: flex; justify-content: flex-end; gap: 8px; }
+.interior-status { position: absolute; z-index: 5; top: 70px; left: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; font-size: 12px; }
+@media(max-width: 600px) { .blueprint-sections { max-height: 160px; } .range-actions > strong { width: 100%; } .interior-status { top: 60px; max-width: calc(100% - 80px); } }

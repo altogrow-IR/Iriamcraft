@@ -1,10 +1,16 @@
 import { parseWorld, type World } from './world.ts';
 export const LEGACY_KEY = 'iriamcraft-world-v1';
 let connection: Promise<IDBDatabase> | undefined;
-function openDB() {
+export function openDB() {
   return (connection ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open('iriamcraft', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('worlds');
+    const req = indexedDB.open('iriamcraft', 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('worlds'))
+        db.createObjectStore('worlds');
+      if (!db.objectStoreNames.contains('blueprints'))
+        db.createObjectStore('blueprints', { keyPath: 'id' });
+    };
     req.onsuccess = () => {
       req.result.onversionchange = () => {
         req.result.close();

@@ -156,7 +156,10 @@ export function place(
   return {
     world: {
       ...world,
-      blocks: [...world.blocks, ...additions.map(normalizeBlock)],
+      blocks: [
+        ...world.blocks,
+        ...additions.map((b) => normalizeBlock({ ...b, terrain: false })),
+      ],
       placed: world.placed + additions.length,
     },
   };
@@ -175,7 +178,7 @@ export function expandGround(world: World): { world: World; error?: string } {
   for (let x = -ISLAND_RADIUS_X; x <= ISLAND_RADIUS_X; x++)
     for (let z = -ISLAND_RADIUS_Z; z <= ISLAND_RADIUS_Z; z++)
       if (onIsland(x, z) && !occupied.has(key({ x, y: 0, z })))
-        additions.push({ x, y: 0, z, material: 'grass' });
+        additions.push({ x, y: 0, z, material: 'grass', terrain: true });
   if (!additions.length) return { world, error: '床はすでに広がっています' };
   return {
     world: {
@@ -231,7 +234,9 @@ export function initialWorld(): World {
   }
   return {
     version: 2,
-    blocks: [...map.values()].map(normalizeBlock),
+    blocks: [...map.values()].map((b) =>
+      normalizeBlock({ ...b, terrain: b.y === 0 }),
+    ),
     placed: 0,
     shows: 0,
     name: 'はじまりの浮島',

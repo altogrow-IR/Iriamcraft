@@ -18,3 +18,11 @@
 - 水の派生セルは保存しない。Workerの世代番号で古い結果を無視する。最下部の建築物より下で排水する。すべてのランプは発光し、実ライトは近い8/12個に限定。
 - 素材UIは `MaterialPicker.tsx` のカテゴリ付きダイアログ。通常時の3D領域を確保する。選択済みブロックからのスワイプだけOrbitControlsを停止し、取消・2本指移行時に復帰する。
 - `tests/browser-check.mjs` は既存のPlaywright + Edgeで実行。`QA_URL` と `PLAYWRIGHT_MODULE` を指定できる。出力はgit管理外の `outputs/`。実機GPU性能とデスクトップ上のスマホ画面検証を区別する。
+
+## マイ設計図・内部ビュー
+
+- DBスキーマは2。worldsを維持しblueprintsを追加。ワールドJSON形式は2のまま。設計図CRUDはblueprint-storage.ts、抽出・回転はcustom-blueprints.ts。
+- terrainは地面由来を表す。新規通常配置はfalse。旧データのみ初期地面の座標・素材・形状と照合。
+- 範囲抽出はhistory.tsのblocksInRangeを共有。自作設計図もplaceとdifferenceを使い原子的に配置する。全体回転はワールドY回転と各ブロックのXYZ回転を合成する。
+- カメラはOrthographicCameraを維持。通常ズーム10の後に追加操作で内部へ移行。OrbitControlsのchangeで前後移動とカメラ中心回転を処理する。homeで内部状態を解除。
+- tests/blueprints-browser.mjsはDB v1移行・マイ設計図・カメラ入力を検証する開発サーバー向けテスト。実機確認とは区別する。

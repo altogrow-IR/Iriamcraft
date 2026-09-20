@@ -102,7 +102,7 @@ const fixture = {
   await page.evaluate(async (old) => {
     localStorage.setItem('iriamcraft-world-v1', JSON.stringify(old));
     const db = await new Promise((r, j) => {
-      const q = indexedDB.open('iriamcraft', 1);
+      const q = indexedDB.open('iriamcraft');
       q.onsuccess = () => r(q.result);
       q.onerror = () => j(q.error);
     });
@@ -259,13 +259,13 @@ const fixture = {
   console.log('PASS door open state, reload');
   // Range delete same selected cell, restoring everything with one undo.
   await page.getByRole('button', { name: '調整', exact: true }).click();
-  await page.getByRole('button', { name: '範囲消し', exact: true }).click();
+  await page.getByRole('button', { name: '範囲選択', exact: true }).click();
   await page.getByRole('button', { name: '閉じる', exact: true }).click();
   pt = await screen(0, 1.2, 0);
   await page.mouse.click(pt.x, pt.y);
   await page.mouse.click(pt.x, pt.y);
   const before = (await world()).blocks.length;
-  await page.getByRole('button', { name: /この範囲を消す/ }).click();
+  await page.getByRole('button', { name: '範囲を消す' }).click();
   assert.equal((await world()).blocks.length, before - 1);
   await page.getByRole('button', { name: '元に戻す', exact: true }).click();
   assert.equal((await world()).blocks.length, before);

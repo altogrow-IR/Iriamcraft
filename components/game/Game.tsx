@@ -70,6 +70,9 @@ import { pickLiveComment, type LiveComment } from '@/lib/live-comments';
 import { IslandEngine } from './engine';
 import { registerWorldTools } from '@/lib/webmcp';
 
+import { MyBlueprints, BlueprintSaveDialog } from './MyBlueprints';
+import { loadBlueprints } from '@/lib/blueprint-storage';
+import { placeBlueprint, type CustomBlueprint } from '@/lib/custom-blueprints';
 import { MaterialPicker } from './MaterialPicker';
 import {
   cells,
@@ -154,6 +157,27 @@ export default function Game() {
   liveRef.current = live;
   const finishRef = useRef(() => {});
   const [shape, setShape] = useState<BlockShape>('cube');
+  const [myPlans, setMyPlans] = useState<CustomBlueprint[]>([]);
+  const [customId, setCustomId] = useState<string>();
+  const [savePlanOpen, setSavePlanOpen] = useState(false);
+  const [interior, setInterior] = useState(false);
+  const [planLoadError, setPlanLoadError] = useState(false);
+  const customPlan = myPlans.find((p) => p.id === customId);
+  const planName =
+    customPlan?.name ?? BLUEPRINTS.find((b) => b.id === plan)!.name;
+  useEffect(() => {
+    let active = true;
+    loadBlueprints()
+      .then((p) => {
+        if (active) setMyPlans(p);
+      })
+      .catch(() => {
+        if (active) setPlanLoadError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const [rangeMode, setRangeMode] = useState(false);
   const [rangeStart, setRangeStart] = useState<Point>();
   const [rangeEnd, setRangeEnd] = useState<Point>();
@@ -198,14 +222,16 @@ export default function Game() {
   const pending = useMemo(
     () =>
       tab === 'blueprints'
-        ? blueprint(plan, selection, rotation)
+        ? customPlan
+          ? placeBlueprint(customPlan, selection, rotation)
+          : blueprint(plan, selection, rotation)
         : brushBlocks(selection, material, brush, rotation).map((b) => ({
             ...b,
             shape,
             rotation: { ...ZERO, y: rotation as QuarterTurn },
             ...(shape === 'door' ? { open: false } : {}),
           })),
-    [tab, plan, selection, rotation, material, brush, shape],
+    [tab, plan, customPlan, selection, rotation, material, brush, shape],
   );
   const validation = useMemo(() => place(world, pending), [world, pending]),
     score = useMemo(() => liveScore(world), [world]);
@@ -294,7 +320,7 @@ export default function Game() {
       setShowHint(false);
       notify(
         tab === 'blueprints'
-          ? `${BLUEPRINTS.find((b) => b.id === plan)!.name}ができました！`
+          ? `${planName}ができました！`
           : `${pending.length}ブロック、いい感じ！`,
       );
       // Keep floor extensions at ground level so repeated placement grows sideways.
@@ -365,6 +391,7 @@ export default function Game() {
         setSelection({ x: p.x + n.x, y: p.y + n.y, z: p.z + n.z });
       });
       engine.current = e;
+      e.onInteriorChange = setInterior;
       e.onRotate = (p, axis, direction) =>
         rotateRef.current(p, axis, direction);
       e.onRotationPreview = () => notify('↻ 90° 指を離すと回転');
@@ -522,6 +549,7 @@ export default function Game() {
     const handler = (e: KeyboardEvent) => {
       if (
         modal ||
+        !!document.querySelector('[role="dialog"]') ||
         result ||
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
@@ -533,7 +561,7 @@ export default function Game() {
         else undo();
         return;
       }
-      if (e.key === 'Enter' && e.target === document.body) {
+      if (e.key === 'Enter' && e.target === document.body && !rangeMode) {
         e.preventDefault();
         build();
       }
@@ -699,6 +727,14 @@ export default function Game() {
             </b>
           </div>
         </aside>
+        {interior && (
+          <div className="interior-status glass-panel">
+            <span>👁 内部ビュー</span>
+            <Button variant="outline" onClick={() => engine.current?.home()}>
+              🏠 外観に戻る
+            </Button>
+          </div>
+        )}
         <div className="sky-tag">
           <span className="status-dot" />
           {night ? '星降る夜' : 'おだやかな昼'}
@@ -938,7 +974,7 @@ export default function Game() {
                 setRangeEnd(undefined);
               }}
             >
-              範囲消し
+              範囲選択
             </Button>
             <Button
               variant="outline"
@@ -1003,6 +1039,52 @@ export default function Game() {
             </button>
           </div>
         )}
+        {rangeMode && rangeStart && rangeEnd && (
+          <section className="range-actions" aria-label="選択範囲">
+            <strong>
+              選択中 {rangeBlocks.length.toLocaleString()}ブロック
+            </strong>
+            <span>
+              幅 {Math.abs(rangeStart.x - rangeEnd.x) + 1} × 高さ{' '}
+              {Math.abs(rangeStart.y - rangeEnd.y) + 1} × 奥行{' '}
+              {Math.abs(rangeStart.z - rangeEnd.z) + 1}
+            </span>
+            <Button
+              disabled={!rangeBlocks.length || !loaded || live || planLoadError}
+              onClick={() => setSavePlanOpen(true)}
+            >
+              設計図として保存
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!rangeBlocks.length || !loaded || live}
+              onClick={build}
+            >
+              範囲を消す
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setRangeStart(undefined);
+                setRangeEnd(undefined);
+                setRangeMode(false);
+              }}
+            >
+              キャンセル
+            </Button>
+          </section>
+        )}
+        {savePlanOpen && (
+          <BlueprintSaveDialog
+            blocks={rangeBlocks}
+            number={myPlans.length + 1}
+            onClose={() => setSavePlanOpen(false)}
+            onSaved={(p) => {
+              setMyPlans((ps) => [p, ...ps]);
+              notify(`「${p.name}」を保存しました`);
+            }}
+          />
+        )}
         <div className="dock-main">
           <div className="palette-wrap">
             {tab === 'blocks' ? (
@@ -1019,24 +1101,48 @@ export default function Game() {
                 }}
               />
             ) : (
-              <div className="blueprint-palette">
-                {BLUEPRINTS.map((b) => (
-                  <Button
-                    key={b.id}
-                    variant="ghost"
-                    className={`blueprint-card ${plan === b.id ? 'selected' : ''}`}
-                    onClick={() => {
-                      setPlan(b.id);
-                      setErase(false);
-                    }}
-                  >
-                    <b.icon />
-                    <span>
-                      <strong>{b.name}</strong>
-                      <small>{b.desc}</small>
-                    </span>
-                  </Button>
-                ))}
+              <div className="blueprint-sections">
+                <strong>おすすめ</strong>
+                <div className="blueprint-palette">
+                  {BLUEPRINTS.map((b) => (
+                    <Button
+                      key={b.id}
+                      variant="ghost"
+                      className={`blueprint-card ${!customPlan && plan === b.id ? 'selected' : ''}`}
+                      onClick={() => {
+                        setPlan(b.id);
+                        setCustomId(undefined);
+                        setErase(false);
+                      }}
+                    >
+                      <b.icon />
+                      <span>
+                        <strong>{b.name}</strong>
+                        <small>{b.desc}</small>
+                      </span>
+                    </Button>
+                  ))}
+                </div>
+                {planLoadError && (
+                  <p role="alert">
+                    マイ設計図を読み込めませんでした。ほかのタブを閉じて再読み込みしてください。保存済みデータは保持しています。
+                  </p>
+                )}
+                <MyBlueprints
+                  plans={myPlans}
+                  selected={customId}
+                  onChange={setMyPlans}
+                  onSelect={(p) => {
+                    setCustomId(p.id);
+                    setErase(false);
+                    setRangeMode(false);
+                    setRangeStart(undefined);
+                    setRangeEnd(undefined);
+                    notify(
+                      `「${p.name}」を選びました。場所と向きを決めて配置してください`,
+                    );
+                  }}
+                />
               </div>
             )}
           </div>
@@ -1082,14 +1188,14 @@ export default function Game() {
             </div>
             <Button
               className={`place-button ${erase ? 'erasing' : ''}`}
-              disabled={!ready || !loaded || live}
+              disabled={!ready || !loaded || live || rangeMode}
               onClick={build}
             >
               {erase ? <Eraser size={19} /> : <Plus size={21} />}
               <span>
                 {rangeMode
                   ? rangeEnd
-                    ? `この範囲を消す（${rangeBlocks.length}）`
+                    ? '選択範囲を確認'
                     : rangeStart
                       ? 'ここから → 2点目を選択'
                       : '1点目を選択'
@@ -1109,7 +1215,7 @@ export default function Game() {
             {erase
               ? '取り外すブロックをタップ'
               : tab === 'blueprints'
-                ? `${BLUEPRINTS.find((b) => b.id === plan)!.name}を選択中`
+                ? `${planName}を選択中`
                 : `${MATERIALS.find((m) => m.id === material)!.name}を選択中`}
             <span className="desktop-only">
               {' '}
@@ -1208,9 +1314,9 @@ export default function Game() {
                 <br />
                 選択済みブロック上を左右スワイプで水平90°回転、上下で縦回転。空いた場所からドラッグでカメラ回転。PCはR、Shift+R。
                 <br />
-                範囲消しは2点を選び、赤い範囲と件数を確認して確定。戻すでまとめて復元できます。水は島の底より下へ落ちると空へ流れ出ます。
+                範囲選択で2点を選ぶと、設計図として保存・範囲を消すを選べます。削除は戻すでまとめて復元できます。マイ設計図は設計図タブから何度でも配置できます。
                 <br />
-                ドラッグ：回転 / 2本指：移動・拡大
+                最大まで拡大した後、さらにズームすると内部ビューになります。ズームで前進・後退し、壁を通り抜けられます。「外観に戻る」で元の視点へ戻れます。
                 <br />
                 PC：矢印キーで位置調整、PageUp / Downで高さ、Enterで配置、Ctrl /
                 ⌘ + Zで戻す。キーボード操作はボタン外をクリックしてから。

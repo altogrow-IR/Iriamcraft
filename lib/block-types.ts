@@ -26,6 +26,7 @@ export type Block = {
   shape?: BlockShape;
   rotation?: BlockRotation;
   open?: boolean;
+  terrain?: boolean;
 };
 export type Point = Pick<Block, 'x' | 'y' | 'z'>;
 export const ZERO: BlockRotation = { x: 0, y: 0, z: 0 };
@@ -36,6 +37,7 @@ export function normalizeBlock(b: Block): Block {
     y: b.y,
     z: b.z,
     material: b.material,
+    ...(b.terrain !== undefined ? { terrain: b.terrain } : {}),
     shape: shapeOf(b),
     rotation: { ...(b.rotation ?? ZERO) },
     ...(shapeOf(b) === 'door' ? { open: b.open ?? false } : {}),
@@ -46,6 +48,7 @@ export function validBlock(b: Block, strict = false) {
   const shape = shapeOf(b),
     r = b.rotation ?? ZERO;
   return (
+    (b.terrain === undefined || typeof b.terrain === 'boolean') &&
     MATERIALS.some((m) => m.id === b.material) &&
     SHAPES.includes(shape) &&
     (!strict || (b.shape !== undefined && b.rotation !== undefined)) &&

@@ -38,3 +38,13 @@ GPU性能はWindows PCの値であり、iPhone/Android実機の値ではあり�
 ## 公開状態
 
 `base: './'` と既存GitHub Actionsワークフローを維持。本番ビルドを `/Iriamcraft/` 配下に配信し、相対アセット・水Worker・ページ再読み込みを確認しています。GitHub Pagesへの反映状況はリポジトリのActionsで確認します。
+
+## 2026-09-20 マイ設計図・内部ビュー
+
+- npm test: 30件成功。1/100/1001/3482ブロック、全形状、地面除外、底面中央、全64通りのXYZ回転と4方向の合成、衝突、一括Undo/Redoを検証。
+- npm run lint / npm run build / TypeScript検査成功。Three.jsの500KB警告は従来同様。
+- tests/browser-check.mjs成功: 旧localStorage維持、回転・2本指切替・ドア・範囲削除・JSON・5万ブロックのIndexedDB保存。
+- tests/blueprints-browser.mjs成功: 実際のDB version 1を事前作成してversion 2へ更新し、島データの完全一致を確認。範囲から保存、再読み込み、名前変更、配置、Undo/Redo、削除後の再読み込み。3482ブロック保存、blueprintsへのQuotaExceededError注入後もworlds保存成功。
+- 390×844、1440×1000で横はみ出しなし。outputs/blueprints-mobile.png、blueprints-desktop.pngで目視確認。
+- 実エンジンへのホイール／CDPタッチで通常ズーム→内部、前後移動、カメラ位置を保持した視点回転、2本指移動、ピンチ後退、外観復帰を確認。ガラス壁を通過して水源付きの閉じた部屋内へ進入。near=0.01、ページズーム倍率1を確認。重大なConsole/page errorなし。
+- iPhone Safari・Android Chromeの実機、実機GPU性能、Safariのページズーム抑止は未検証。通常ズーム上限10はPC上のモバイル画面で調整。
